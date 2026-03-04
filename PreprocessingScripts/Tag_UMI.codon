@@ -1,0 +1,164 @@
+import sys
+import bio # codon (seq) library
+from collections import Counter
+
+## Run script like this:
+#codon run -plugin seq -release -D BC_LEN=10 -D BC_START=4 Tag_UMI.codon \
+# R3_001.fastq.gz \
+# R1_001.fastq.gz \
+# R2_001.fastq.gz \
+# NSSTF1 UM .
+
+## Functions
+# Function to get the filename and extension
+def split_filename(filepath):
+    # Get the base name
+    filename = filepath.split('/')[-1]  # Assuming Unix-like paths; adjust for Windows if needed
+    # Split into name and extension
+    if filename.endswith('.gz'):
+        name, ext1, gz = filename.rsplit('.', 2)
+    else:
+        name, ext1 = filename.rsplit('.', 1)
+    return name, ext1
+
+def tag_fastq(
+    I2:str,
+    R1:str,
+    R2:str,
+    tag: str,
+    reads_per_barcode_tsv_filename: str,
+    out_folder: str,
+    rev_comp: bool
+) -> float:
+    """
+    Read BC FASTQ
+    Add corrected BCs as comments to R1 R2 FASTQs
+
+    Parameters
+    ----------
+    I2:
+        Input FASTQ(.GZ) barcode reads
+    R1 & R2:
+        Input FASTQ(.GZ) paired-end reads
+    bc_whitelist:
+        File with barcode whitelist, newline separated
+    tag:
+        2-letter SAM tag fitting [A-Za-z][A-Za-z0-9]
+    corrected_bc_stats_tsv_filename:
+        File with barcode correction statistics.
+    rev_comp:
+        Whether to take the Reverse Complement of the BC in I2 before checking the WL.
+
+    Returns
+    -------
+    frac_bcs_found
+
+    """
+
+    # Initialize FASTQ readers
+    if I2.endswith('.gz'):
+        I2_gen = bio.FASTQ(I2, gzip=True, validate=False, copy=True)
+    else:
+        I2_gen = bio.FASTQ(I2, gzip=False, validate=False, copy=True)
+
+    # Process R1
+    if R1.endswith('.gz'):
+        R1_gen = bio.FASTQ(R1, gzip=True, validate=False, copy=True)
+    else:
+        R1_gen = bio.FASTQ(R1, gzip=False, validate=False, copy=True)
+
+    # Process R2
+    if R2.endswith('.gz'):
+        R2_gen = bio.FASTQ(R2, gzip=True, validate=False, copy=True)
+    else:
+        R2_gen = bio.FASTQ(R2, gzip=False, validate=False, copy=True)
+
+    # Initialize FASTQ writers
+    R1_fname, R1_ext = split_filename(R1)
+    R2_fname, R2_ext = split_filename(R2)
+    R1_tagged_outpath = f"{out_folder}/{R1_fname}_{tag}.{R1_ext}"
+    R1_tagged_outpath_fh = open(R1_tagged_outpath, 'w')
+    R2_tagged_outpath = f"{out_folder}/{R2_fname}_{tag}.{R2_ext}"
+    R2_tagged_outpath_fh = open(R2_tagged_outpath, 'w')
+    
+    # Initialize barcode and stats lists
+    corr_bcs = List[str](capacity=500000000)
+    n_reads = 0
+
+    sys.stdout.write(f"Tagging reads with UMI...\n")
+    
+    for recordI2,recordR1,recordR2 in zip(I2_gen,R1_gen, R2_gen):
+        #assert recordI2.name == recordR1.name == recordR2.name, f"I2 ({I2}) & R1 ({R1}) & R2 ({R2}) read names don't match."
+
+        # Get barcode sequence and associated quality from FASTQ record
+        if rev_comp:
+            # reverse complemented
+            bc_seq, bc_qual = ((~(recordI2.seq[BC_START:BC_START+BC_LEN]), recordI2.qual[BC_START:BC_START+BC_LEN][::-1]))
+        else:
+            # Forward
+            bc_seq, bc_qual = (recordI2.seq[BC_START:BC_START+BC_LEN], recordI2.qual[BC_START:BC_START+BC_LEN])
+        
+        bc_seq = str(bc_seq)
+        record_name_tagged = recordR1.name + f' {tag}:Z:{bc_seq}' + f'\t{recordR1.comment}'
+        corr_bcs.append(bc_seq)
+
+        R1_tagged_outpath_fh.write(f'@{record_name_tagged}\n{recordR1.read}\n+\n{recordR1.qual}\n')
+        R2_tagged_outpath_fh.write(f'@{record_name_tagged}\n{recordR2.read}\n+\n{recordR2.qual}\n')
+
+        n_reads += 1
+        if n_reads % 20000 == 0:
+            sys.stdout.write(f"\r{n_reads} reads processed ...")
+            sys.stdout.flush()
+                
+    sys.stdout.write("\r")
+    sys.stdout.flush()
+    sys.stdout.write(f"Finished processing {n_reads} reads...\n")
+    
+    BC_Counter = Counter(corr_bcs)
+    
+    # write the reads_per_barcode to reads_per_barcode_tsv_filename
+    with open(out_folder + reads_per_barcode_tsv_filename, "w") as file:
+        # Write item counts as tab-separated values
+        for bc, read_count in BC_Counter.items():
+            file.write(f"{read_count}\t{bc}\n")
+    
+    # Close the corrected read files
+    R1_tagged_outpath_fh.close()
+    R2_tagged_outpath_fh.close()
+
+    return 0
+    
+
+def main():
+    # Check that the correct number of arguments are passed
+    if not (isinstance(BC_LEN, int) and isinstance(BC_START, int) and len(sys.argv) == 7):
+        sys.stderr.write(
+            f"Wrong call, exiting...\nUsage: codon run -plugin seq -release -D BC_LEN=<Barcode Length> -D BC_START=<Start Position Barcode> {sys.argv[0]} <Path I2> <Path R1> <Path R2> <Sample Name> <2-letter Tag> <Output Folder> \n\n")
+        sys.exit(1)
+    else:
+        I2 = sys.argv[1]
+        R1 = sys.argv[2]
+        R2 = sys.argv[3]
+        sample_name = sys.argv[4]
+        tag_name = sys.argv[5]
+        out = sys.argv[6]
+
+    # Ensure the path ends with a '/'
+    if not out.endswith('/'):
+        out = out + '/'
+
+    # Read FASTQ with Forward barcodes and write R1 R2 FASTQs tagging them in the read comment
+    # with a tag and a barcode that match the whitelist closely enough, 
+    # Output stats
+    tag_fastq(
+        I2 = I2,
+        R1 = R1,
+        R2 = R2,
+        tag=tag_name,
+        reads_per_barcode_tsv_filename=f'Reads_Per_Barcode_{sample_name}_{tag_name}.tsv',
+        out_folder=out,
+        rev_comp=True)
+    
+
+if __name__ == "__main__":
+    main()

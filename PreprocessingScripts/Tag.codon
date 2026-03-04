@@ -1,0 +1,280 @@
+import sys
+import bio # codon (seq) library
+from collections import Counter
+from utils import *
+
+## Run script like this:
+#codon run -plugin seq -release -D BC_LEN=8 -D BC_START=0 -D HD=1 Tag.codon \
+# R3_001.fastq.gz \
+# R1_001.fastq.gz \
+# R2_001.fastq.gz \
+# whitelist.txt \
+# NSSTF1 MO .
+
+## Functions
+def read_barcode_whitelist_from_file(bc_whitelist_filename: str):
+    """
+    Read whitelisted barcodes from file and convert to a set of Kmers.
+    Parameters
+    ----------
+    bc_whitelist_filename
+        Filename with whitelisted barcodes.
+
+    Returns
+    -------
+    Set with barcodes as Kmers.
+    """
+    sys.stdout.write(f"Importing whitelist: {bc_whitelist_filename}\n")
+    bc_whitelist = set()
+
+    with open(bc_whitelist_filename, "r") as fh:
+        [bc_whitelist.add(Kmer[BC_LEN](seq(bc_line.strip()))) for bc_line in fh]
+        
+    return bc_whitelist
+
+# Function to get the filename and extension
+def split_filename(filepath):
+    # Get the base name
+    filename = filepath.split('/')[-1]  # Assuming Unix-like paths; adjust for Windows if needed
+    # Split into name and extension
+    if filename.endswith('.gz'):
+        name, ext1, gz = filename.rsplit('.', 2)
+    else:
+        name, ext1 = filename.rsplit('.', 1)
+    return name, ext1
+    
+def tag_fastq(
+    I2:str,
+    R1:str,
+    R2:str,
+    bc_whitelist: set[Kmer[BC_LEN]],
+    tag: str,
+    first_pass: bool,
+    xBC: str,
+    corrected_bc_stats_tsv_filename: str,
+    reads_per_barcode_tsv_filename: str,
+    out_folder: str,
+    rev_comp: bool
+) -> float:
+    """
+    Read BC FASTQ
+    Add corrected BCs as comments to R1 R2 FASTQs
+
+    Parameters
+    ----------
+    I2:
+        Input FASTQ(.GZ) barcode reads
+    R1 & R2:
+        Input FASTQ(.GZ) paired-end reads
+    bc_whitelist:
+        File with barcode whitelist, newline separated
+    tag:
+        2-letter SAM tag fitting [A-Za-z][A-Za-z0-9]
+    corrected_bc_stats_tsv_filename:
+        File with barcode correction statistics.
+    rev_comp:
+        Whether to take the Reverse Complement of the BC in I2 before checking the WL.
+
+    Returns
+    -------
+    frac_bcs_found
+
+    """
+
+    # Initialize FASTQ readers
+    if I2.endswith('.gz'):
+        I2_gen = bio.FASTQ(I2, gzip=True, validate=False, copy=True)
+    else:
+        I2_gen = bio.FASTQ(I2, gzip=False, validate=False, copy=True)
+
+    # Process R1
+    if R1.endswith('.gz'):
+        R1_gen = bio.FASTQ(R1, gzip=True, validate=False, copy=True)
+    else:
+        R1_gen = bio.FASTQ(R1, gzip=False, validate=False, copy=True)
+
+    # Process R2
+    if R2.endswith('.gz'):
+        R2_gen = bio.FASTQ(R2, gzip=True, validate=False, copy=True)
+    else:
+        R2_gen = bio.FASTQ(R2, gzip=False, validate=False, copy=True)
+
+    # Initialize FASTQ writers
+    R1_fname, R1_ext = split_filename(R1)
+    R2_fname, R2_ext = split_filename(R2)
+    R1_tagged_outpath = f"{out_folder}/{R1_fname}_{tag}.{R1_ext}"
+    R1_tagged_outpath_fh = open(R1_tagged_outpath, 'w')
+    R2_tagged_outpath = f"{out_folder}/{R2_fname}_{tag}.{R2_ext}"
+    R2_tagged_outpath_fh = open(R2_tagged_outpath, 'w')
+    
+    # Initialize barcode and stats lists
+    corr_bcs = List[str](capacity=500000000)
+    # Store number of reads which have hamming distance of 0, 1, 2 or 3 from barcodes whitelist.
+    bc_mismatches_stats = [0, 0, 0, 0]
+    n_reads = 0
+
+    sys.stdout.write(f"Tagging reads...\n")
+    
+    for recordI2,recordR1,recordR2 in zip(I2_gen,R1_gen, R2_gen):
+        #assert recordI2.name == recordR1.name == recordR2.name, f"I2 ({I2}) & R1 ({R1}) & R2 ({R2}) read names don't match."
+
+        # Get barcode sequence and associated quality from FASTQ record
+        if rev_comp:
+            # reverse complemented
+            bc_seq, bc_qual = ((~(recordI2.seq[BC_START:BC_START+BC_LEN]), recordI2.qual[BC_START:BC_START+BC_LEN][::-1]))
+        else:
+            # Forward
+            bc_seq, bc_qual = (recordI2.seq[BC_START:BC_START+BC_LEN], recordI2.qual[BC_START:BC_START+BC_LEN])
+
+        corrected_bc = correct_bc(
+        bc_whitelist=bc_whitelist,
+        bc_length=BC_LEN,
+        bc_seq=bc_seq,
+        bc_qual=bc_qual,
+        max_hamming_dist=HD)
+        
+        if first_pass:
+            R1comment = ''
+        else:
+            R1comment = '\t' + recordR1.comment
+                    
+        ##Check if read comment is already a SAM tag
+        #if (len(recordR1.comment) >= 3 and recordR1.comment[2] == ':' and recordR1.comment[0].isalpha() and recordR1.comment[1].isalnum()):
+        #    R1comment = '\t' + recordR1.comment
+        #else:
+        #    R1comment = ''
+
+        if corrected_bc:
+            bc_mismatches_stats[corrected_bc.dist] += 1
+            corr_bcs.append(corrected_bc.bc)
+            record_name_tagged = recordR1.name + f' {tag}:Z:{xBC}{corrected_bc.bc}' + f'{R1comment}'
+        else:
+            record_name_tagged = recordR1.name + f' {tag}:Z:NoMatch' + f'{R1comment}'
+            corr_bcs.append('NoMatch')
+
+        R1_tagged_outpath_fh.write(f'@{record_name_tagged}\n{recordR1.read}\n+\n{recordR1.qual}\n')
+        R2_tagged_outpath_fh.write(f'@{record_name_tagged}\n{recordR2.read}\n+\n{recordR2.qual}\n')
+
+        n_reads += 1
+        if n_reads % 20000 == 0:
+            sys.stdout.write(f"\r{n_reads} reads processed ...")
+            sys.stdout.flush()
+                
+    sys.stdout.write("\r")
+    sys.stdout.flush()
+    sys.stdout.write(f"Finished processing {n_reads} reads...\n")
+    
+    BC_Counter = Counter(corr_bcs)
+    n_nomatch = BC_Counter.pop('NoMatch')
+    
+    # Close the corrected read files
+    R1_tagged_outpath_fh.close()
+    R2_tagged_outpath_fh.close()
+
+    sys.stdout.write("Writing stats, log files\n\n")
+    # Calculate number of reads with/without a barcode.
+    bc_reads = sum(bc_mismatches_stats) # bcs not found are not there
+    reads_without_bc = n_reads - bc_reads
+    # Calculate fraction of barcodes found in all reads.
+    frac_bcs_found = bc_reads / n_reads
+    
+    # Store the stats
+    stats_tsv = (
+        f"reads\t{n_reads}\t100.00%\n" +
+        f"bc_reads\t{bc_reads}\t" + f"{(bc_reads / n_reads * 100.0)}%\n" +
+        f"reads_without_bc\t{reads_without_bc}\t" + f"{(reads_without_bc / n_reads * 100.0)}%\n"
+    )
+    for i in range(0, HD + 1):
+        stats_tsv += (
+            f"bc_reads_with_{i}_mismatches\t{bc_mismatches_stats[i]}\t" +
+            f"{(bc_mismatches_stats[i] / n_reads * 100.0)}%\n"
+        )
+    
+    #Writing log files and sam header
+    # write the stats to corrected_bc_stats_tsv_filename
+    with open(out_folder + corrected_bc_stats_tsv_filename, 'w') as file:
+        file.write(stats_tsv)
+    
+    # write the reads_per_barcode to reads_per_barcode_tsv_filename
+    with open(out_folder + reads_per_barcode_tsv_filename, "w") as file:
+        # Write item counts as tab-separated values
+        for bc, read_count in BC_Counter.items():
+            file.write(f"{read_count}\t{bc}\n")
+        file.write(f"{n_nomatch}\tNoMatch")
+    
+    # print the stats to the console
+    sys.stdout.write(f'\n{stats_tsv}\n')
+
+    return frac_bcs_found
+    
+
+def main():
+    # Check that the correct number of arguments are passed
+    if not (isinstance(BC_LEN, int) and isinstance(BC_START, int) and isinstance(HD, int) and len(sys.argv) == 10):
+        sys.stderr.write(
+            f"Wrong call, exiting...\nUsage: codon run -plugin seq -release -D BC_LEN=<Barcode Length> -D BC_START=<Start Position Barcode> -D HD=<Maximum Hamming Distance> {sys.argv[0]} <Path I2> <Path R1> <Path R2> <Path Whitelist> <Sample Name> <2-letter Tag> <Output Folder> <first_pass_arg> <rev_comp_arg>\n\n")
+        sys.exit(1)
+    else:
+        I2 = sys.argv[1]
+        R1 = sys.argv[2]
+        R2 = sys.argv[3]
+        bc_whitelist_filename = sys.argv[4]
+        sample_name = sys.argv[5]
+        tag_name = sys.argv[6]
+        out = sys.argv[7]
+        first_pass_arg = sys.argv[8]
+        rev_comp_arg = sys.argv[9]
+        
+    # Check that the max_mismatches is 0, 1, 2 or 3
+    if HD not in [0,1,2,3]:
+        sys.stderr.write(f"\nExiting...\nMaximum Hamming Distance (HD) must be 0, 1, 2 or 3\n")
+        sys.exit(1)
+
+    # Ensure the path ends with a '/'
+    if not out.endswith('/'):
+        out = out + '/'
+    
+    xtraBC = ''
+    if first_pass_arg=='first_pass':
+        IS_IT_YOUR_FIRST_PASS=True
+    elif first_pass_arg[:-1]=='first_pass_withBC_':
+        IS_IT_YOUR_FIRST_PASS=True
+        xtraBC = first_pass_arg[-1]
+    elif first_pass_arg=='not_first_pass':
+        IS_IT_YOUR_FIRST_PASS=False
+    else:
+        sys.stderr.write(f"\nExiting...\nFirst Pass argument not set properly\n")
+        sys.exit(1)
+
+    if rev_comp_arg=='rev':
+        REV_COMP=True
+    elif rev_comp_arg=='fw':
+        REV_COMP=False
+    else:
+        sys.stderr.write(f"\nExiting...\nRev Comp argument not set properly\n")
+        sys.exit(1)
+
+    # Read cell barcodes from file and convert to a set of Kmers.
+    bc_whitelist = read_barcode_whitelist_from_file(bc_whitelist_filename=bc_whitelist_filename)
+
+    # Read FASTQ with Forward barcodes and write R1 R2 FASTQs tagging them in the read comment
+    # with a tag and a barcode that match the whitelist closely enough, 
+    # Output stats
+
+    frac_bcs_found = tag_fastq(
+        I2 = I2,
+        R1 = R1,
+        R2 = R2,
+        bc_whitelist=bc_whitelist,
+        tag=tag_name,
+        first_pass=IS_IT_YOUR_FIRST_PASS,
+        xBC = xtraBC,
+        corrected_bc_stats_tsv_filename=f'Barcode_Statistics_{sample_name}_{tag_name}.tsv',
+        reads_per_barcode_tsv_filename=f'Reads_Per_Barcode_{sample_name}_{tag_name}.tsv',
+        out_folder=out,
+        rev_comp=REV_COMP)
+    
+    sys.stdout.write(f"\n{frac_bcs_found * 100.00}% of the reads had a valid barcode.\n")
+
+if __name__ == "__main__":
+    main()

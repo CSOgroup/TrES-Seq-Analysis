@@ -1,0 +1,187 @@
+import sys
+import bio
+from bio import *
+from typing import List, Tuple
+
+
+def open_fastq(path: str):
+	# One-time decision; not hot.
+	if path.endswith(".gz"):
+		return bio.FASTQ(path, gzip=True, validate=False, copy=True)
+	else:
+		return bio.FASTQ(path, gzip=False, validate=False, copy=True)
+
+
+def extract_cr_and_others(comment: str) -> Tuple[str, List[str]]:
+	"""
+	From FASTQ comment, extract:
+	  - CR value = CB + UM
+	  - other tags (excluding CB and UM), preserving tokens verbatim.
+
+	Accepts whitespace-separated tokens (spaces and/or tabs), e.g.:
+	  CB:Z:AAAA  RG:Z:AAAA  UM:Z:TTTT SB:Z:AAAA
+	"""
+	cb = ""
+	um = ""
+	others: List[str] = []
+	others_append = others.append
+
+	i = 0
+	n = len(comment)
+
+	while i < n:
+		# skip whitespace (space/tab)
+		while i < n and (comment[i] == ' ' or comment[i] == '\t'):
+			i += 1
+		if i >= n:
+			break
+
+		j = i
+		while j < n and (comment[j] != ' ' and comment[j] != '\t'):
+			j += 1
+
+		# token = comment[i:j]
+		# detect CB/UM quickly; tolerate KEY:Z:VAL or KEY:VAL by taking text after last ':'
+		if (j - i) >= 5 and comment[i] == 'C' and comment[i + 1] == 'B' and comment[i + 2] == ':':
+			k = comment.rfind(':', i, j)
+			if k >= 0 and (k + 1) < j:
+				cb = comment[k + 1:j]
+		elif (j - i) >= 5 and comment[i] == 'U' and comment[i + 1] == 'M' and comment[i + 2] == ':':
+			k = comment.rfind(':', i, j)
+			if k >= 0 and (k + 1) < j:
+				um = comment[k + 1:j]
+		else:
+			# keep everything else
+			others_append(comment[i:j])
+
+		i = j + 1
+
+	if (not cb) or (not um):
+		return "", others
+
+	return cb + um, others
+
+
+def normalize_qname(n1: str, n2: str) -> str:
+	"""
+	Return a SAM QNAME that matches both mates:
+	  - if equal, return as-is
+	  - else allow /1 and /2 suffix normalization
+	"""
+	if n1 == n2:
+		return n1
+	# allow common /1 /2
+	if len(n1) > 2 and len(n2) > 2 and n1[-2:] == "/1" and n2[-2:] == "/2" and n1[:-2] == n2[:-2]:
+		return n1[:-2]
+	return ""
+
+
+def write_unmapped_pairs_to_sam(R1: str, R2: str, sam_outpath: str) -> int:
+	stdout_write = sys.stdout.write
+	stdout_flush = sys.stdout.flush
+
+	stdout_write("Opening FASTQs...\n")
+	R1_gen = open_fastq(R1)
+	R2_gen = open_fastq(R2)
+	R2_it = iter(R2_gen)
+
+	extract = extract_cr_and_others
+
+	with open(sam_outpath, "w") as out:
+		write = out.write
+
+		# minimal header
+		write("@HD\tVN:1.6\tSO:unsorted\n")
+
+		SAM_STATIC_R1 = "\t77\t*\t0\t0\t*\t*\t0\t0\t"
+		SAM_STATIC_R2 = "\t141\t*\t0\t0\t*\t*\t0\t0\t"
+		CR_PREFIX = "\tCR:Z:"
+
+		n_pairs_total = 0
+		n_pairs_written = 0
+		next_report = 1000000
+
+		stdout_write("Processing read pairs...\n")
+
+		for rec1 in R1_gen:
+			rec2 = next(R2_it)
+			n_pairs_total += 1
+
+			# behave like prior RNA splitter: skip NoMatch
+			comment = rec1.comment
+			if comment.find("NoMatch") >= 0:
+				continue
+
+			cr_val, other_tags = extract(comment)
+			if not cr_val:
+				sys.stderr.write("ERROR: Missing CB or UM tag in FASTQ comment\n")
+				sys.exit(1)
+
+			qname = normalize_qname(rec1.name, rec2.name)
+			if not qname:
+				sys.stderr.write("ERROR: Mate names do not match: " + rec1.name + " vs " + rec2.name + "\n")
+				sys.exit(1)
+
+			seq1 = str(rec1.seq)
+			qual1 = str(rec1.qual)
+			seq2 = str(rec2.seq)
+			qual2 = str(rec2.qual)
+
+			# Write R1 SAM
+			write(qname)
+			write(SAM_STATIC_R1)
+			write(seq1)
+			write("\t")
+			write(qual1)
+			write(CR_PREFIX)
+			write(cr_val)
+			for t in other_tags:
+				write("\t")
+				write(t)
+			write("\n")
+
+			# Write R2 SAM
+			write(qname)
+			write(SAM_STATIC_R2)
+			write(seq2)
+			write("\t")
+			write(qual2)
+			write(CR_PREFIX)
+			write(cr_val)
+			for t in other_tags:
+				write("\t")
+				write(t)
+			write("\n")
+
+			n_pairs_written += 1
+			if n_pairs_written >= next_report:
+				stdout_write("\rProcessed " + str(n_pairs_written) + " kept read pairs...")
+				stdout_flush()
+				next_report += 1000000
+
+	stdout_write(
+		"\nFinished. Total pairs seen: " + str(n_pairs_total) +
+		"; pairs written: " + str(n_pairs_written) +
+		" (2× records).\n"
+	)
+	return 0
+
+
+def main():
+	if len(sys.argv) != 4:
+		sys.stderr.write(
+			"Wrong call, exiting...\n"
+			"Usage: codon run -plugin seq -release FqToSAM.codon "
+			"<R1.fq[.gz]> <R2.fq[.gz]> <out.sam>\n\n"
+		)
+		sys.exit(1)
+
+	R1_arg = sys.argv[1]
+	R2_arg = sys.argv[2]
+	sam_outpath_arg = sys.argv[3]
+
+	write_unmapped_pairs_to_sam(R1_arg, R2_arg, sam_outpath_arg)
+
+
+if __name__ == "__main__":
+	main()

@@ -1,0 +1,685 @@
+import sys
+import bio
+from bio import *
+import gzip
+from internal.file import gzFile
+from typing import Dict, Set, List, Tuple
+
+# -----------------------------
+# Normalize SB: by design SB in comment includes injected base as FIRST base.
+# Key is "all bases after the first one".
+# -----------------------------
+def normalize_sb_drop_first(sb: str) -> str:
+	if len(sb) < 2:
+		sys.stderr.write("ERROR: SB tag length < 2: " + sb + "\n")
+		sys.exit(1)
+	return sb[1:]
+
+
+# -----------------------------
+# Hot-path tag extraction from FASTQ comment
+# Tokens like:
+#   CB:Z:AAAA  SB:Z:AGCAT  ...
+# or
+#   CB:AAAA    SB:AGCAT    ...
+# -----------------------------
+def get_cb_mo_sb(comment: str) -> Tuple[str, str, str]:
+	cb = ""
+	mo = ""
+	sb = ""
+
+	i = 0
+	n = len(comment)
+
+	while i < n:
+		while i < n and (comment[i] == ' ' or comment[i] == '\t'):
+			i += 1
+		if i >= n:
+			break
+
+		j = i
+		while j < n and (comment[j] != ' ' and comment[j] != '\t'):
+			j += 1
+
+		if (j - i) >= 3 and comment[i] == 'C' and comment[i + 1] == 'B' and comment[i + 2] == ':':
+			k = comment.rfind(':', i, j)
+			if k >= 0 and (k + 1) < j:
+				cb = comment[k + 1:j]
+		elif (j - i) >= 3 and comment[i] == 'M' and comment[i + 1] == 'O' and comment[i + 2] == ':':
+			k = comment.rfind(':', i, j)
+			if k >= 0 and (k + 1) < j:
+				mo = comment[k + 1:j]
+		elif (j - i) >= 3 and comment[i] == 'S' and comment[i + 1] == 'B' and comment[i + 2] == ':':
+			k = comment.rfind(':', i, j)
+			if k >= 0 and (k + 1) < j:
+				sb = comment[k + 1:j]
+
+		i = j + 1
+
+	return cb, mo, sb
+
+
+def get_cb_sb(comment: str) -> Tuple[str, str]:
+	cb = ""
+	sb = ""
+
+	i = 0
+	n = len(comment)
+
+	while i < n:
+		while i < n and (comment[i] == ' ' or comment[i] == '\t'):
+			i += 1
+		if i >= n:
+			break
+
+		j = i
+		while j < n and (comment[j] != ' ' and comment[j] != '\t'):
+			j += 1
+
+		if (j - i) >= 3 and comment[i] == 'C' and comment[i + 1] == 'B' and comment[i + 2] == ':':
+			k = comment.rfind(':', i, j)
+			if k >= 0 and (k + 1) < j:
+				cb = comment[k + 1:j]
+		elif (j - i) >= 3 and comment[i] == 'S' and comment[i + 1] == 'B' and comment[i + 2] == ':':
+			k = comment.rfind(':', i, j)
+			if k >= 0 and (k + 1) < j:
+				sb = comment[k + 1:j]
+
+		i = j + 1
+
+	return cb, sb
+
+
+# -----------------------------
+# SB group map loading
+# TSV columns: sample<TAB>sb_group<TAB>sb_bc
+# Returns:
+#   sb_to_gid: maps SB key -> group index
+#   idx_to_group: list of group names by index
+# -----------------------------
+def load_sb_group_map_tsv(path: str, sample: str) -> Tuple[Dict[str, int], List[str]]:
+	sb_to_gid: Dict[str, int] = {}
+	group_to_gid: Dict[str, int] = {}
+	idx_to_group: List[str] = []
+
+	with open(path, "r") as f:
+		for line in f:
+			line = line.rstrip()
+			if not line:
+				continue
+			if line[0] == '#':
+				continue
+
+			parts = line.split()
+			if len(parts) < 3:
+				continue
+
+			s = parts[0]
+			if s != sample:
+				continue
+
+			gname = parts[1]
+			sb_bc = parts[2]
+
+			if gname in group_to_gid:
+				gid = group_to_gid[gname]
+			else:
+				gid = len(idx_to_group)
+				group_to_gid[gname] = gid
+				idx_to_group.append(gname)
+
+			if sb_bc in sb_to_gid:
+				if sb_to_gid[sb_bc] != gid:
+					sys.stderr.write("ERROR: SB group conflict for sample " + sample + " SB " + sb_bc + "\n")
+					sys.exit(1)
+			else:
+				sb_to_gid[sb_bc] = gid
+
+	if len(sb_to_gid) == 0:
+		sys.stderr.write("ERROR: No SB group mapping found for sample " + sample + " in " + path + "\n")
+		sys.exit(1)
+
+	# sanity: ensure all groups have at least one SB
+	grp_counts: List[int] = []
+	for _ in range(len(idx_to_group)):
+		grp_counts.append(0)
+	for k in sb_to_gid:
+		grp_counts[sb_to_gid[k]] += 1
+	for g in range(len(idx_to_group)):
+		if grp_counts[g] == 0:
+			sys.stderr.write("ERROR: SB group has zero barcodes for sample " + sample + " group " + idx_to_group[g] + "\n")
+			sys.exit(1)
+
+	return sb_to_gid, idx_to_group
+
+
+# -----------------------------
+# MO map loading (unchanged behavior)
+# Supports BOTH:
+#  (A) 3-col: sample mark mo_bc
+#  (B) 4-col: sample sb_group mark mo_bc
+# -----------------------------
+def load_mo_map_tsv(map_path: str, sample: str, group_to_gid: Dict[str, int], use_sb: bool) -> Tuple[List[str], List[int], List[int], List[str]]:
+	mark_to_idx: Dict[str, int] = {}
+	idx_to_mark: List[str] = []
+
+	mo_list: List[str] = []
+	mo_gid: List[int] = []
+	mo_mark_idx: List[int] = []
+
+	pair_to_mark: Dict[str, int] = {}
+	seen_format = 0
+
+	with open(map_path, "r") as f:
+		for line in f:
+			line = line.rstrip()
+			if not line:
+				continue
+			if line[0] == '#':
+				continue
+
+			parts = line.split()
+			if len(parts) < 3:
+				continue
+
+			s = parts[0]
+			if s != sample:
+				continue
+
+			if len(parts) >= 4:
+				if seen_format == 0:
+					seen_format = 4
+				elif seen_format != 4:
+					sys.stderr.write("ERROR: mixed 3-col and 4-col MO map lines for sample " + sample + "\n")
+					sys.exit(1)
+
+				gname = parts[1]
+				mark = parts[2]
+				mo = parts[3]
+				gid = 0
+
+				if use_sb:
+					if gname in group_to_gid:
+						gid = group_to_gid[gname]
+					else:
+						sys.stderr.write("ERROR: MO map uses sb_group '" + gname + "' not present in SB group map for sample " + sample + "\n")
+						sys.exit(1)
+				else:
+					gid = 0
+			else:
+				if seen_format == 0:
+					seen_format = 3
+				elif seen_format != 3:
+					sys.stderr.write("ERROR: mixed 3-col and 4-col MO map lines for sample " + sample + "\n")
+					sys.exit(1)
+
+				mark = parts[1]
+				mo = parts[2]
+				gid = -1
+
+			if mark in mark_to_idx:
+				midx = mark_to_idx[mark]
+			else:
+				midx = len(idx_to_mark)
+				mark_to_idx[mark] = midx
+				idx_to_mark.append(mark)
+
+			key = str(gid) + "|" + mo
+			if key in pair_to_mark:
+				if pair_to_mark[key] != midx:
+					sys.stderr.write("ERROR: mapping conflict for sample " + sample + " gid " + str(gid) + " MO " + mo + "\n")
+					sys.exit(1)
+			else:
+				pair_to_mark[key] = midx
+				mo_list.append(mo)
+				mo_gid.append(gid)
+				mo_mark_idx.append(midx)
+
+	if len(mo_list) == 0:
+		sys.stderr.write("ERROR: No MO mapping found for sample " + sample + " in " + map_path + "\n")
+		sys.exit(1)
+
+	return mo_list, mo_gid, mo_mark_idx, idx_to_mark
+
+
+def write_SAM_RG_Header(sample: str, lib: str, out_path: str, passing_BCs: Set[str]) -> None:
+	with open(out_path, "w") as fh:
+		for bc in passing_BCs:
+			fh.write("@RG\tID:")
+			fh.write(bc)
+			fh.write("\tSM:")
+			fh.write(sample)
+			fh.write("\tLB:")
+			fh.write(lib)
+			fh.write("\tPL:ELEMENT\tPM:AVITI_500MIO\n")
+
+
+def write_fastq_record(fh: gzFile, name: str, comment: str, seq_s: str, qual_s: str) -> None:
+	fh.write("@")
+	fh.write(name)
+	if comment:
+		fh.write(" ")
+		fh.write(comment)
+	fh.write("\n")
+	fh.write(seq_s)
+	fh.write("\n+\n")
+	fh.write(qual_s)
+	fh.write("\n")
+
+
+def find_mark_for_mo(mo: str, gid: int, mo_list: List[str], mo_gid: List[int], mo_mark_idx: List[int]) -> int:
+	mo_n = len(mo_list)
+
+	for k in range(mo_n):
+		if mo == mo_list[k] and mo_gid[k] == gid:
+			return mo_mark_idx[k]
+
+	for k in range(mo_n):
+		if mo == mo_list[k] and mo_gid[k] == -1:
+			return mo_mark_idx[k]
+
+	return -1
+
+
+# -----------------------------
+# Compute gid from SB raw:
+#  - primary key: drop injected base (sb_raw[1:])
+#  - fallback: sb_raw itself (defensive)
+#  - NEVER silently route to gid=0 on mismatch
+# -----------------------------
+def gid_from_sb_raw(sample: str, sb_raw: str, sb_to_gid: Dict[str, int]) -> int:
+	# defensive: if some inputs ever already have injected base removed
+	if sb_raw in sb_to_gid:
+		return sb_to_gid[sb_raw]
+	
+	key1 = normalize_sb_drop_first(sb_raw)
+	if key1 in sb_to_gid:
+		return sb_to_gid[key1]
+
+	sys.stderr.write("ERROR: SB not found in SB group map for sample " + sample + ": raw=" + sb_raw + " key=" + key1 + "\n")
+	sys.exit(1)
+	return 0
+
+
+def MakeRecordNameList_DNA(
+		sample: str,
+		out_folder: str,
+		R1_path: str,
+		R2_path: str,
+		lib_name: str,
+		mo_map_path: str,
+		sb_group_map_path: str = "",
+		unknown_policy: str = "fail"
+	) -> int:
+
+	use_sb = False
+	if sb_group_map_path and sb_group_map_path != "-" and sb_group_map_path != "none":
+		use_sb = True
+
+	sys.stdout.write("Initialization\n")
+
+	R1_gen = bio.FASTQ(R1_path, gzip=True, validate=False, copy=True)
+	R2_gen = bio.FASTQ(R2_path, gzip=True, validate=False, copy=True)
+	R2_it = iter(R2_gen)
+
+	sb_to_gid: Dict[str, int] = {}
+	idx_to_group: List[str] = []
+	group_to_gid: Dict[str, int] = {}
+
+	if use_sb:
+		sb_to_gid, idx_to_group = load_sb_group_map_tsv(sb_group_map_path, sample)
+		# build group_to_gid
+		for g in range(len(idx_to_group)):
+			group_to_gid[idx_to_group[g]] = g
+
+	mo_list, mo_gid, mo_mark_idx, idx_to_mark = load_mo_map_tsv(mo_map_path, sample, group_to_gid, use_sb)
+	n_marks = len(idx_to_mark)
+	n_groups = len(idx_to_group) if use_sb else 1
+	total_slots = n_groups * n_marks
+
+	unknown_mode = 0
+	if unknown_policy == "skip":
+		unknown_mode = 1
+	elif unknown_policy == "unknown":
+		unknown_mode = 2
+	elif unknown_policy != "fail":
+		sys.stderr.write("ERROR: unknown_policy must be fail|skip|unknown\n")
+		sys.exit(1)
+
+	used: List[int] = []
+	for _ in range(total_slots):
+		used.append(0)
+
+	for k in range(len(mo_list)):
+		midx = mo_mark_idx[k]
+		gid = mo_gid[k]
+		if gid == -1:
+			for g in range(n_groups):
+				used[g * n_marks + midx] = 1
+		else:
+			if gid >= 0 and gid < n_groups:
+				used[gid * n_marks + midx] = 1
+
+	r1_fhs: List[gzFile] = []
+	r2_fhs: List[gzFile] = []
+	bc_sets: List[Set[str]] = []
+
+	for i in range(total_slots):
+		bc_sets.append(Set[str]())
+		if used[i] == 1:
+			gid = i // n_marks
+			midx = i - gid * n_marks
+			mark = idx_to_mark[midx]
+
+			if use_sb:
+				gname = idx_to_group[gid]
+				prefix = out_folder + "/" + sample + "_" + gname + "_" + mark
+			else:
+				prefix = out_folder + "/" + sample + "_" + mark
+
+			r1_fhs.append(gzip.open(prefix + "_R1.fq.gz", "w"))
+			r2_fhs.append(gzip.open(prefix + "_R2.fq.gz", "w"))
+		else:
+			r1_fhs.append(gzip.open("/dev/null", "w"))
+			r2_fhs.append(gzip.open("/dev/null", "w"))
+
+	unknown_r1: gzFile = gzip.open("/dev/null", "w")
+	unknown_r2: gzFile = gzip.open("/dev/null", "w")
+	unknown_bcs: Set[str] = Set[str]()
+	unknown_count = 0
+	unknown_mo_count = 0
+
+	if unknown_mode == 2:
+		unknown_r1.close()
+		unknown_r2.close()
+		unknown_r1 = gzip.open(out_folder + "/" + sample + "_Unknown_R1.fq.gz", "w")
+		unknown_r2 = gzip.open(out_folder + "/" + sample + "_Unknown_R2.fq.gz", "w")
+
+	sys.stdout.write("Read Splitting\n")
+
+	processed = 0
+	next_report = 20000
+
+	for rec1 in R1_gen:
+		rec2 = next(R2_it)
+		processed += 1
+
+		if processed >= next_report:
+			sys.stdout.write("\r")
+			sys.stdout.write(str(processed))
+			sys.stdout.write(" reads processed ...")
+			sys.stdout.flush()
+			next_report += 20000
+
+		comment = rec1.comment
+		if comment.find("NoMatch") >= 0:
+			continue
+
+		cb, mo, sb_raw = get_cb_mo_sb(comment)
+		if (not cb) or (not mo) or (not sb_raw):
+			sys.stderr.write("ERROR: Missing CB or MO or SB tag in FASTQ comment\n")
+			sys.exit(1)
+
+		gid = 0
+		if use_sb:
+			gid = gid_from_sb_raw(sample, sb_raw, sb_to_gid)
+
+		midx = find_mark_for_mo(mo, gid, mo_list, mo_gid, mo_mark_idx)
+		if midx < 0:
+			unknown_mo_count += 1
+			unknown_count += 1
+			if unknown_mode == 1:
+				continue
+			elif unknown_mode == 2:
+				seq1 = str(rec1.seq); qual1 = str(rec1.qual)
+				seq2 = str(rec2.seq); qual2 = str(rec2.qual)
+				write_fastq_record(unknown_r1, rec1.name, rec1.comment, seq1, qual1)
+				write_fastq_record(unknown_r2, rec2.name, rec2.comment, seq2, qual2)
+				unknown_bcs.add(cb)
+				continue
+			else:
+				sys.stderr.write("ERROR: MO barcode not found for sample " + sample + ": " + mo + "\n")
+				sys.exit(1)
+
+		slot = gid * n_marks + midx
+		if used[slot] != 1:
+			sys.stderr.write("ERROR: internal: slot not marked used but read mapped to it\n")
+			sys.exit(1)
+
+		seq1 = str(rec1.seq); qual1 = str(rec1.qual)
+		seq2 = str(rec2.seq); qual2 = str(rec2.qual)
+		write_fastq_record(r1_fhs[slot], rec1.name, rec1.comment, seq1, qual1)
+		write_fastq_record(r2_fhs[slot], rec2.name, rec2.comment, seq2, qual2)
+		bc_sets[slot].add(cb)
+
+	sys.stdout.write("\rFinished processing ")
+	sys.stdout.write(str(processed))
+	sys.stdout.write(" reads...\n")
+
+	if unknown_count > 0:
+		sys.stdout.write("Unknown reads total: ")
+		sys.stdout.write(str(unknown_count))
+		sys.stdout.write(" (MO_unknown=")
+		sys.stdout.write(str(unknown_mo_count))
+		sys.stdout.write(", policy=")
+		sys.stdout.write(unknown_policy)
+		sys.stdout.write(")\n")
+
+	sys.stdout.write("SAM_RG_Header Writing\n")
+
+	for i in range(total_slots):
+		r1_fhs[i].close()
+		r2_fhs[i].close()
+		if used[i] != 1:
+			continue
+
+		gid2 = i // n_marks
+		midx2 = i - gid2 * n_marks
+		mark = idx_to_mark[midx2]
+
+		if use_sb:
+			gname2 = idx_to_group[gid2]
+			hpath = out_folder + "/SAM_RG_Header_" + sample + "_" + gname2 + "_" + mark + ".tsv"
+		else:
+			hpath = out_folder + "/SAM_RG_Header_" + sample + "_" + mark + ".tsv"
+
+		write_SAM_RG_Header(sample, lib_name, hpath, bc_sets[i])
+
+	unknown_r1.close()
+	unknown_r2.close()
+	if unknown_mode == 2:
+		write_SAM_RG_Header(sample, lib_name, out_folder + "/SAM_RG_Header_" + sample + "_Unknown.tsv", unknown_bcs)
+
+	sys.stdout.write("DONE\n")
+	return 0
+
+
+def MakeRecordNameList_RNA(
+		sample: str,
+		out_folder: str,
+		R1_path: str,
+		R2_path: str,
+		lib_name: str,
+		sb_group_map_path: str = "",
+		unknown_policy: str = "fail"
+	) -> int:
+
+	use_sb = False
+	if sb_group_map_path and sb_group_map_path != "-" and sb_group_map_path != "none":
+		use_sb = True
+
+	sys.stdout.write("Initialization\n")
+
+	R1_gen = bio.FASTQ(R1_path, gzip=True, validate=False, copy=True)
+	R2_gen = bio.FASTQ(R2_path, gzip=True, validate=False, copy=True)
+	R2_it = iter(R2_gen)
+
+	sb_to_gid: Dict[str, int] = {}
+	idx_to_group: List[str] = []
+	if use_sb:
+		sb_to_gid, idx_to_group = load_sb_group_map_tsv(sb_group_map_path, sample)
+
+	n_groups = len(idx_to_group) if use_sb else 1
+
+	unknown_mode = 0
+	if unknown_policy == "skip":
+		unknown_mode = 1
+	elif unknown_policy == "unknown":
+		unknown_mode = 2
+	elif unknown_policy != "fail":
+		sys.stderr.write("ERROR: unknown_policy must be fail|skip|unknown\n")
+		sys.exit(1)
+
+	r1_fhs: List[gzFile] = []
+	r2_fhs: List[gzFile] = []
+	bc_sets: List[Set[str]] = []
+
+	for g in range(n_groups):
+		bc_sets.append(Set[str]())
+		if use_sb:
+			gname = idx_to_group[g]
+			prefix = out_folder + "/" + sample + "_" + gname
+		else:
+			prefix = out_folder + "/" + sample
+
+		r1_fhs.append(gzip.open(prefix + "_R1.fq.gz", "w"))
+		r2_fhs.append(gzip.open(prefix + "_R2.fq.gz", "w"))
+
+	unknown_r1: gzFile = gzip.open("/dev/null", "w")
+	unknown_r2: gzFile = gzip.open("/dev/null", "w")
+	unknown_bcs: Set[str] = Set[str]()
+	unknown_count = 0
+
+	if unknown_mode == 2:
+		unknown_r1.close()
+		unknown_r2.close()
+		unknown_r1 = gzip.open(out_folder + "/" + sample + "_Unknown_R1.fq.gz", "w")
+		unknown_r2 = gzip.open(out_folder + "/" + sample + "_Unknown_R2.fq.gz", "w")
+
+	sys.stdout.write("Read Splitting\n")
+
+	processed = 0
+	next_report = 20000
+
+	for rec1 in R1_gen:
+		rec2 = next(R2_it)
+		processed += 1
+
+		if processed >= next_report:
+			sys.stdout.write("\r")
+			sys.stdout.write(str(processed))
+			sys.stdout.write(" reads processed ...")
+			sys.stdout.flush()
+			next_report += 20000
+
+		comment = rec1.comment
+		if comment.find("NoMatch") >= 0:
+			continue
+
+		cb, sb_raw = get_cb_sb(comment)
+		if (not cb) or (not sb_raw):
+			sys.stderr.write("ERROR: Missing CB or SB tag in FASTQ comment\n")
+			sys.exit(1)
+
+		gid = 0
+		if use_sb:
+			# This is the critical part: no fallback to TP3_A on mismatch.
+			gid = gid_from_sb_raw(sample, sb_raw, sb_to_gid)
+
+		seq1 = str(rec1.seq); qual1 = str(rec1.qual)
+		seq2 = str(rec2.seq); qual2 = str(rec2.qual)
+
+		write_fastq_record(r1_fhs[gid], rec1.name, rec1.comment, seq1, qual1)
+		write_fastq_record(r2_fhs[gid], rec2.name, rec2.comment, seq2, qual2)
+		bc_sets[gid].add(cb)
+
+	sys.stdout.write("\rFinished processing ")
+	sys.stdout.write(str(processed))
+	sys.stdout.write(" reads...\n")
+
+	if unknown_count > 0:
+		sys.stdout.write("Unknown reads total: ")
+		sys.stdout.write(str(unknown_count))
+		sys.stdout.write(" (policy=")
+		sys.stdout.write(unknown_policy)
+		sys.stdout.write(")\n")
+
+	sys.stdout.write("SAM_RG_Header Writing\n")
+
+	for g in range(n_groups):
+		r1_fhs[g].close()
+		r2_fhs[g].close()
+
+		if use_sb:
+			gname = idx_to_group[g]
+			hpath = out_folder + "/SAM_RG_Header_" + sample + "_" + gname + ".tsv"
+		else:
+			hpath = out_folder + "/SAM_RG_Header_" + sample + ".tsv"
+
+		write_SAM_RG_Header(sample, lib_name, hpath, bc_sets[g])
+
+	unknown_r1.close()
+	unknown_r2.close()
+	if unknown_mode == 2:
+		write_SAM_RG_Header(sample, lib_name, out_folder + "/SAM_RG_Header_" + sample + "_Unknown.tsv", unknown_bcs)
+
+	sys.stdout.write("DONE\n")
+	return 0
+
+
+def main():
+	# Unified interface (unchanged):
+	# DNA:
+	#   codon run -plugin seq -release Split_ReadsV2.codon <Sample> <OutFolder> <LibName> dna <mo_map.tsv> <R1.fq.gz> <R2.fq.gz> [sb_group_map.tsv]
+	# RNA:
+	#   codon run -plugin seq -release Split_ReadsV2.codon <Sample> <OutFolder> <LibName> rna - <R1.fq.gz> <R2.fq.gz> [sb_group_map.tsv]
+	if len(sys.argv) != 8 and len(sys.argv) != 9:
+		sys.stderr.write(
+			"Wrong call, exiting...\n"
+			"Usage:\n"
+			"  DNA: codon run -plugin seq -release " + sys.argv[0] +
+			" <Sample> <OutFolder> <LibName> dna <mo_map.tsv> <R1> <R2> [sb_group_map.tsv]\n"
+			"  RNA: codon run -plugin seq -release " + sys.argv[0] +
+			" <Sample> <OutFolder> <LibName> rna - <R1> <R2> [sb_group_map.tsv]\n\n"
+		)
+		sys.exit(1)
+
+	sample_name  = sys.argv[1]
+	out          = sys.argv[2]
+	library_name = sys.argv[3]
+	mode         = sys.argv[4]
+	mo_map_path  = sys.argv[5]
+	R1_path_arg  = sys.argv[6]
+	R2_path_arg  = sys.argv[7]
+	sb_map_path  = ""
+	if len(sys.argv) == 9:
+		sb_map_path = sys.argv[8]
+
+	if mode == "dna":
+		MakeRecordNameList_DNA(
+			sample=sample_name,
+			out_folder=out,
+			R1_path=R1_path_arg,
+			R2_path=R2_path_arg,
+			lib_name=library_name,
+			mo_map_path=mo_map_path,
+			sb_group_map_path=sb_map_path,
+			unknown_policy="fail"
+		)
+	elif mode == "rna":
+		MakeRecordNameList_RNA(
+			sample=sample_name,
+			out_folder=out,
+			R1_path=R1_path_arg,
+			R2_path=R2_path_arg,
+			lib_name=library_name,
+			sb_group_map_path=sb_map_path,
+			unknown_policy="fail"
+		)
+	else:
+		sys.stderr.write("ERROR: mode must be dna|rna\n")
+		sys.exit(1)
+
+
+if __name__ == "__main__":
+	main()

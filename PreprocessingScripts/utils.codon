@@ -1,0 +1,126 @@
+from bio import *
+
+@inline
+def qual_sort_idx(qual):
+    """
+    Return a list of indices that sorts the given quality scores `qual`
+    in ascending order (lowest to highest quality). Uses `sorted` from the bio package.
+    """
+    idxs = [
+        x[0]
+        for x in sorted(
+            enumerate(qual),
+            key=lambda x: x[1],
+            algorithm="insertion",
+            reverse=False
+        )
+    ]
+    return idxs
+
+def ham1_qual_sort(kmer, qual):
+    """
+    Yield all kmers with exactly one base different (Hamming distance 1), prioritizing
+    positions with lower quality (as per `qual`). Substitutions at lower-quality positions occur first.
+    """
+    assert len(kmer) == len(qual)
+    idxs = qual_sort_idx(qual)
+    for i in range(len(kmer)):
+        idx = idxs[i]
+        for b in (k"A", k"C", k"G", k"T"):
+            if kmer[idx] != b:
+                # base(kmer, idx, b): returns a new kmer with base at index idx replaced by b
+                yield kmer |> base(idx, b)
+
+@tuple
+class CorrBc:
+    dist: int
+    bc: str
+
+    def __new__(dist: int, bc: str) -> CorrBc:
+        return (dist, bc)
+
+def correct_bc_qual(
+    whitelist,
+    bc,
+    qual,
+    max_dist: int
+) -> Optional[CorrBc]:
+    """
+    Attempt to correct `bc` by matches in `whitelist`. Up to `max_dist`
+    mismatches allowed, substitutions start at lowest-quality base. Returns CorrBc if found, else None.
+    """
+    if bc in whitelist:
+        # Exact match found.
+        return CorrBc(0, str(bc))
+
+    if max_dist >= 1:
+        for n in ham1_qual_sort(bc, qual):
+            if n in whitelist:
+                return CorrBc(1, str(n))
+    return None
+
+def correct_bc_Ns(
+    whitelist,
+    bc_len: Static[int],
+    bc_Ns: str,
+    max_dist: int
+) -> Optional[CorrBc]:
+    """
+    Correct barcodes containing 'N' by substituting each with all bases.
+    Allows up to `max_dist` ambiguous positions.
+    Returns CorrBc if a valid substitution is found; otherwise None.
+    """
+    n_num = 0
+    n_idx = List[int](capacity=len(bc_Ns))
+    for idx, nuc in enumerate(bc_Ns):
+        if nuc == "N":
+            n_num += 1
+            n_idx.append(idx)
+    if n_num > max_dist:
+        return None
+
+    bc = Kmer[bc_len](bc_Ns.replace("N", "A"))
+    if n_num == 1:
+        p0 = n_idx[0]
+        for b in (k"A", k"C", k"G", k"T"):
+            cand = bc |> base(p0, b)
+            if cand in whitelist:
+                return CorrBc(1, str(cand))
+    elif n_num == 2:
+        p0, p1 = n_idx[0], n_idx[1]
+        for b1 in (k"A", k"C", k"G", k"T"):
+            for b2 in (k"A", k"C", k"G", k"T"):
+                cand = bc |> base(p0, b1) |> base(p1, b2)
+                if cand in whitelist:
+                    return CorrBc(2, str(cand))
+    elif n_num == 3:
+        p0, p1, p2 = n_idx[0], n_idx[1], n_idx[2]
+        for b1 in (k"A", k"C", k"G", k"T"):
+            for b2 in (k"A", k"C", k"G", k"T"):
+                for b3 in (k"A", k"C", k"G", k"T"):
+                    cand = bc |> base(p0, b1) |> base(p1, b2) |> base(p2, b3)
+                    if cand in whitelist:
+                        return CorrBc(3, str(cand))
+    return None  # Could not correct by substituting 'N's.
+
+def correct_bc(
+    bc_whitelist,
+    bc_length: Static[int],
+    bc_seq: seq,
+    bc_qual: str,
+    max_hamming_dist: int
+) -> Optional[CorrBc]:
+    """
+    Correct the provided barcode (`bc_seq`) either by fixing 'N's (up to max_hamming_dist substitutions)
+    or, if none, via lowest-quality mutation (qual-guided). Returns a CorrBc if found, otherwise None.
+    """
+    assert len(str(bc_seq)) == bc_length, "Barcodes are not the expected length."
+    if "N" in str(bc_seq):
+        corr = correct_bc_Ns(
+            bc_whitelist, bc_length, str(bc_seq), max_hamming_dist
+        )
+    else:
+        corr = correct_bc_qual(
+            bc_whitelist, Kmer[bc_length](bc_seq), bc_qual, max_hamming_dist
+        )
+    return corr

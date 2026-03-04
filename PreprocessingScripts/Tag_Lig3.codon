@@ -1,0 +1,325 @@
+import sys
+import bio # codon (seq) library
+from collections import Counter
+from utils import *
+
+## Run script like this:
+#codon run -plugin seq -release -D BC_LEN=8 -D HD=1 Tag_Lig3.codon \
+# R3_001.fastq.gz \
+# R1_001.fastq.gz \
+# R2_001.fastq.gz \
+# whitelist.txt \
+# NSSTF1 CB .
+
+## Functions
+def read_barcode_whitelist_from_file(bc_whitelist_filename: str):
+    """
+    Read whitelisted barcodes from file and convert to a set of Kmers.
+    Parameters
+    ----------
+    bc_whitelist_filename
+        Filename with whitelisted barcodes.
+
+    Returns
+    -------
+    Set with barcodes as Kmers.
+    """
+    sys.stdout.write(f"Importing whitelist: {bc_whitelist_filename}\n")
+    bc_whitelist = set()
+
+    with open(bc_whitelist_filename, "r") as fh:
+        [bc_whitelist.add(Kmer[BC_LEN](seq(bc_line.strip()))) for bc_line in fh]
+
+    return bc_whitelist
+
+# Function to get the filename and extension
+def split_filename(filepath):
+    # Get the base name
+    filename = filepath.split('/')[-1]  # Assuming Unix-like paths; adjust for Windows if needed
+    # Split into name and extension
+    if filename.endswith('.gz'):
+        name, ext1, gz = filename.rsplit('.', 2)
+    else:
+        name, ext1 = filename.rsplit('.', 1)
+    return name, ext1
+
+def tag_fastq(
+    I2:str,
+    R1:str,
+    R2:str,
+    bc_whitelist: set[Kmer[BC_LEN]],
+    l_bc_start_list: List[int],
+    tag: str,
+    sample: str,
+    out_folder: str,
+    rev_comp: bool
+) -> float:
+    """
+    Read BC FASTQ
+    Add corrected BCs as comments to R1 R2 FASTQs
+
+    Parameters
+    ----------
+    I2:
+        Input FASTQ(.GZ) barcode reads
+    R1 & R2:
+        Input FASTQ(.GZ) paired-end reads
+    bc_whitelist:
+        File with barcode whitelist, newline separated
+    tag:
+        2-letter SAM tag fitting [A-Za-z][A-Za-z0-9]
+    corrected_bc_stats_tsv_filename:
+        File with barcode correction statistics.
+    rev_comp:
+        Whether to take the Reverse Complement of the BC in I2 before checking the WL.
+
+    Returns
+    -------
+    frac_bcs_found
+
+    """
+    corrected_bc_stats_tsv_filename = f'Barcode_Statistics_{sample}_{tag}.tsv'
+    reads_per_barcode_tsv_filename = f'Reads_Per_Barcode_{sample}_{tag}.tsv'
+    Tag_records_filename = f'Tag_Records_{sample}.tsv'
+    
+    # Initialize file readers/writers
+    # Process barcode  reader
+    if I2.endswith('.gz'):
+        I2_gen = bio.FASTQ(I2, gzip=True, validate=False, copy=True)
+    else:
+        I2_gen = bio.FASTQ(I2, gzip=False, validate=False, copy=True)
+
+    # Process R1
+    if R1.endswith('.gz'):
+        R1_gen = bio.FASTQ(R1, gzip=True, validate=False, copy=True)
+    else:
+        R1_gen = bio.FASTQ(R1, gzip=False, validate=False, copy=True)
+
+    # Process R2
+    if R2.endswith('.gz'):
+        R2_gen = bio.FASTQ(R2, gzip=True, validate=False, copy=True)
+    else:
+        R2_gen = bio.FASTQ(R2, gzip=False, validate=False, copy=True)
+
+    # Initialize output paths
+    R1_fname, R1_ext = split_filename(R1)
+    R2_fname, R2_ext = split_filename(R2)
+    R1_tagged_outpath = f"{out_folder}/{R1_fname}_{tag}.{R1_ext}"
+    R1_tagged_outpath_fh = open(R1_tagged_outpath, 'w')
+    R2_tagged_outpath = f"{out_folder}/{R2_fname}_{tag}.{R2_ext}"
+    R2_tagged_outpath_fh = open(R2_tagged_outpath, 'w')
+
+    # Handle Tag records output paths
+    Tag_records_outpath = f"{out_folder}/{Tag_records_filename}"
+    Tag_records_outpath_fh = open(Tag_records_outpath, 'w')
+    
+    # Initialize barcode and stats lists
+    corr_bcs = List[str](capacity=500000000)
+    # Store number of reads which have hamming distance of 0, 1, 2 or 3 from barcodes whitelist.
+    bc_mismatches_stats_l1 = [0, 0, 0, 0]
+    bc_mismatches_stats_l2 = [0, 0, 0, 0]
+    bc_mismatches_stats_l3 = [0, 0, 0, 0]
+    n_reads = 0
+
+    sys.stdout.write(f"Going through the reads.\n")
+    for recordI2,recordR1,recordR2 in zip(I2_gen,R1_gen, R2_gen):
+        n_reads += 1
+        if n_reads % 20000 == 0:
+            sys.stdout.write(f"\r{n_reads} reads tagged ...")
+            sys.stdout.flush()
+
+        # L1
+        # Get barcode sequence and associated quality from FASTQ recordI2
+        if rev_comp:
+            # reverse complemented
+            bc_seq_l1, bc_qual_l1 = ((~(recordI2.seq[l_bc_start_list[0]:l_bc_start_list[0]+BC_LEN]), recordI2.qual[l_bc_start_list[0]:l_bc_start_list[0]+BC_LEN][::-1]))
+        else:
+            # Forward
+            bc_seq_l1, bc_qual_l1 = (recordI2.seq[l_bc_start_list[0]:l_bc_start_list[0]+BC_LEN], recordI2.qual[l_bc_start_list[0]:l_bc_start_list[0]+BC_LEN])
+                    
+        corrected_bc_l1 = correct_bc(
+        bc_whitelist=bc_whitelist,
+        bc_length=BC_LEN,
+        bc_seq=bc_seq_l1,
+        bc_qual=bc_qual_l1,
+        max_hamming_dist=HD)
+        
+        if corrected_bc_l1:
+            bc_mismatches_stats_l1[corrected_bc_l1.dist] += 1
+        else:
+            corrected_bc_l1 = (8,'NoMatch')
+        # L2
+        # Get barcode sequence and associated quality from FASTQ recordI2
+        if rev_comp:
+            # reverse complemented
+            bc_seq_l2, bc_qual_l2 = ((~(recordI2.seq[l_bc_start_list[1]:l_bc_start_list[1]+BC_LEN]), recordI2.qual[l_bc_start_list[1]:l_bc_start_list[1]+BC_LEN][::-1]))
+        else:
+            # Forward
+            bc_seq_l2, bc_qual_l2 = (recordI2.seq[l_bc_start_list[1]:l_bc_start_list[1]+BC_LEN], recordI2.qual[l_bc_start_list[1]:l_bc_start_list[1]+BC_LEN])
+                    
+        corrected_bc_l2 = correct_bc(
+        bc_whitelist=bc_whitelist,
+        bc_length=BC_LEN,
+        bc_seq=bc_seq_l2,
+        bc_qual=bc_qual_l2,
+        max_hamming_dist=HD)
+        
+        if corrected_bc_l2:
+            bc_mismatches_stats_l2[corrected_bc_l2.dist] += 1
+        else:
+            corrected_bc_l2 = (8,'NoMatch')
+
+        # L3
+        # Get barcode sequence and associated quality from FASTQ recordI2
+        if rev_comp:
+            # reverse complemented
+            bc_seq_l3, bc_qual_l3 = ((~(recordI2.seq[l_bc_start_list[2]:l_bc_start_list[2]+BC_LEN]), recordI2.qual[l_bc_start_list[2]:l_bc_start_list[2]+BC_LEN][::-1]))
+        else:
+            # Forward
+            bc_seq_l3, bc_qual_l3 = (recordI2.seq[l_bc_start_list[2]:l_bc_start_list[2]+BC_LEN], recordI2.qual[l_bc_start_list[2]:l_bc_start_list[2]+BC_LEN])
+                    
+        corrected_bc_l3 = correct_bc(
+        bc_whitelist=bc_whitelist,
+        bc_length=BC_LEN,
+        bc_seq=bc_seq_l3,
+        bc_qual=bc_qual_l3,
+        max_hamming_dist=HD)
+        
+        if n_reads == 1:
+            assert len(bc_seq_l3) == len(bc_seq_l2) == len(bc_seq_l1) == int(BC_LEN), f"Length of the ligation barcodes ({BC_LEN}) don't match:\nbc_seq_l3:{len(bc_seq_l3)}\nbc_seq_l2:{len(bc_seq_l2)}\nbc_seq_l1:{len(bc_seq_l1)}"
+            assert recordI2.name == recordR1.name == recordR2.name, f"I2 ({I2}) & R1 ({R1}) & R2 ({R2}) read names don't match."
+
+        if corrected_bc_l3:
+            bc_mismatches_stats_l3[corrected_bc_l3.dist] += 1
+        else:
+            corrected_bc_l3 = (8,'NoMatch')
+        
+        sb_start = recordR1.comment.find("SB:Z:")
+        sb_tag = recordR1.comment[sb_start+5:].split()[0]
+
+        corrs = [sb_tag,corrected_bc_l1.bc,corrected_bc_l2.bc,corrected_bc_l3.bc]
+        # Check for NoMatch and build the final_bc
+        final_bc = 'NoMatch' if 'NoMatch' in corrs else ''.join(corrs)
+        
+        corr_bcs.append(final_bc)
+        
+        record_name_tagged = recordR1.name + f' {tag}:Z:{final_bc}' + f'\tRG:Z:{final_bc}' + f'\t{recordR1.comment}'
+        R1_tagged_outpath_fh.write(f'@{record_name_tagged}\n{recordR1.read}\n+\n{recordR1.qual}\n')
+        R2_tagged_outpath_fh.write(f'@{record_name_tagged}\n{recordR2.read}\n+\n{recordR2.qual}\n')
+        Tag_records_outpath_fh.write(recordR1.name + f'\t{tag}:Z:{final_bc}' + f'\tL1:Z:{corrected_bc_l1.bc}' + f'\tL2:Z:{corrected_bc_l2.bc}' + f'\tL3:Z:{corrected_bc_l3.bc}' + f'\t{recordR1.comment}'+'\n')
+
+    sys.stdout.write("\r")
+    sys.stdout.flush()
+    sys.stdout.write(f"Finished. Tagged {n_reads} reads...\n")
+
+    sys.stdout.write(f"Preparing BCs lists...")
+
+    BC_Counter = Counter(corr_bcs)
+    n_nomatch = BC_Counter.pop('NoMatch')
+
+    sys.stdout.write("\r")
+    sys.stdout.flush()
+    sys.stdout.write(f"Preparing BCs lists...DONE\n")
+    sys.stdout.flush()
+    
+    # Close the corrected read files
+    R1_tagged_outpath_fh.close()
+    R2_tagged_outpath_fh.close()
+    Tag_records_outpath_fh.close()
+
+    sys.stdout.write("Writing stats, log files\n")
+
+    for li,bc_mismatches_stats in enumerate([bc_mismatches_stats_l1,bc_mismatches_stats_l2,bc_mismatches_stats_l3]):
+        li+=1
+        # Calculate number of reads with/without a barcode.
+        bc_reads = sum(bc_mismatches_stats) # bcs not found are not there
+        reads_without_bc = n_reads - bc_reads
+        n_passing_reads = n_reads - reads_without_bc #in this case n_passing_reads are the reads with all 3 ligations
+        # Calculate fraction of barcodes found in all reads.
+        frac_bcs_found = bc_reads / n_reads
+        # Reads in barcode with less than required amount of reads
+        reads_in_too_small_bc = bc_reads - n_passing_reads #in this case reads_in_too_small_bc are the reads with at least 1 valid ligation but not all 3 ligations
+        
+        # stats
+        stats_tsv = (
+            f"reads\t{n_reads}\t100.00%\n" +
+            f"reads_with_L{li}\t{bc_reads}\t" + f"{(bc_reads / n_reads * 100.0)}%\n" +
+            f"reads_without_L{li}\t{reads_without_bc}\t" + f"{(reads_without_bc / n_reads * 100.0)}%\n"
+        )
+        for i in range(0, HD + 1):
+            stats_tsv += (
+                f"reads_with_L{li}_at_{i}_mismatches\t{bc_mismatches_stats[i]}\t" +
+                f"{(bc_mismatches_stats[i] / n_reads * 100.0)}%\n"
+            )
+        stats_tsv += (
+            f"reads_with_L{li}\t{bc_reads}\t" + f"{(bc_reads / n_reads * 100.0)}%\n" +
+            f"reads_with_L{li}_with_all_ligations\t{n_passing_reads}\t" + f"{(n_passing_reads / bc_reads * 100.0)}%\n" +
+            f"reads_with_L{li}_missing_other_ligation\t{reads_in_too_small_bc}\t" + f"{(reads_in_too_small_bc / bc_reads * 100.0)}%\n"
+            f"reads_with_all_ligations\t{n_passing_reads}\t" + f"{(n_passing_reads / n_reads * 100.0)}%\n"        
+        )
+        
+        #Writing log files and sam header
+        # write the stats to corrected_bc_stats_tsv_filename
+        with open(out_folder + f"{corrected_bc_stats_tsv_filename.rsplit('.', 1)[0]}_L{li}.{corrected_bc_stats_tsv_filename.rsplit('.', 1)[1]}", 'w') as file:
+            file.write(stats_tsv)
+
+    # write the reads_per_barcode to reads_per_barcode_tsv_filename
+    with open(out_folder + reads_per_barcode_tsv_filename, "w") as file:
+        # Write item counts as tab-separated values
+        for bc, read_count in BC_Counter.items():
+            file.write(f"{read_count}\t{bc}\n")
+        file.write(f"{n_nomatch}\tNoMatch")
+
+    # print the stats to the console
+    sys.stdout.write(f'DONE\n')
+
+    return frac_bcs_found
+    
+
+def main():
+    START_LIST = [15,53,91]
+
+    # Check that the correct number of arguments are passed
+    if not (isinstance(HD, int) and isinstance(BC_LEN, int) and len(sys.argv) == 8):
+        sys.stderr.write(
+            f"Wrong call, exiting...\nUsage: codon run -plugin seq -release -D BC_LEN=<Barcode Length> -D HD=<Maximum Hamming Distance> {sys.argv[0]} <Path I2> <Path R1> <Path R2> <Path Whitelist> <Sample Name> <2-letter Tag> <Output Folder> \n\n")
+        sys.exit(1)
+    else:
+        I2 = sys.argv[1]
+        R1 = sys.argv[2]
+        R2 = sys.argv[3]
+        bc_whitelist_filename = sys.argv[4]
+        sample_name = sys.argv[5]
+        tag_name = sys.argv[6]
+        out = sys.argv[7]
+        
+    # Check that the max_mismatches is 0, 1, 2 or 3
+    if HD not in [0,1,2,3]:
+        sys.stderr.write(f"\nExiting...\nMaximum Hamming Distance (HD) must be 0, 1, 2 or 3\n")
+        sys.exit(1)
+
+    if sample_name=="Sc_K9D45_S5":
+        START_LIST = [42,80,118]
+
+
+    # Read cell barcodes from file and convert to a set of Kmers.
+    bc_whitelist = read_barcode_whitelist_from_file(bc_whitelist_filename=bc_whitelist_filename)
+
+    # Read FASTQ with Forward barcodes and write R1 R2 FASTQs tagging them in the read comment
+    # with a tag and a barcode that match the whitelist closely enough, 
+    # Output stats
+    frac_bcs_found = tag_fastq(
+        I2 = I2,
+        R1 = R1,
+        R2 = R2,
+        bc_whitelist=bc_whitelist,
+        l_bc_start_list = START_LIST,
+        tag=tag_name,
+        sample=sample_name,
+        out_folder=out+'/',
+        rev_comp=False)
+    
+    sys.stdout.write(f"{frac_bcs_found * 100.00}% of the reads had a valid barcode.\n")
+
+if __name__ == "__main__":
+    main()
