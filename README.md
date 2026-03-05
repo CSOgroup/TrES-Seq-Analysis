@@ -12,7 +12,7 @@ The analysis is made of 2 major parts, preprocessing (*PeprocessingScripts*) and
 ### 1. Data availability
 Raw files are available here:
 
-Processed files - AnnData objects, fragments file (SnapATAC2), bigwig tracks are available as supplementary files in the GEO repository:
+Processed files - AnnData objects (Scanpy), fragments files (SnapATAC2), and bigwig tracks are available as supplementary files in the GEO repository:
 
 ### 2. Environment
 All analyses were made using the environment in *env*. To recreate that environment you can use:
