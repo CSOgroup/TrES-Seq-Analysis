@@ -4,3 +4,22 @@ Code repository related to analysing TrES-Seq data
 
 
 ### Overview
+
+The analysis is made of 2 major parts, preprocessing (*PeprocessingScripts*) and the processing launchers (*ProcessingScripts*). Both are needed to demultiplex the raw reads, align them and process the result into usable matrices and fragment files. These files can then be used as input to reproduce the figures in the publication using the *FiguresScripts*. Alternatively processed files can be downloaded to start at the last step.
+
+### 1. Data availability
+Raw files are available here:
+Processed files - AnnData objects, fragments file (SnapATAC2), bigwig tracks are available as supplementary files in the GEO repository:
+
+### 2. Environment
+All analyses were made using the environment in *env*. To recreate that environment you can use:
+```
+conda env create -f env/environment.yaml
+```
+To preprocess the raw fastq files you will need to install [Codon](https://github.com/exaloop/codon) and [Seq](https://github.com/exaloop/seq), in addition to this environment. To install them, follow the instructions listed in the links.
+
+### 3. Modify the config
+To run a script, you will need to open it to modify the path to the input files of that script and the required accompanying scripts (only for preprocessing).
+
+### 4. Raw reads processing
+Before starting the preprocessing, first use the scripts in the _GenerateSTARSoloGenome_ folder to create the proper STAR genomes that will be used during processing. Then to process a specific dataset, use *Launch.sh* inside the corresponding folder in *ProcessingScripts*. The attached whitelists *WLs* are required to demultiplex the reads. You can then use *PostProcessing.py* to obtain the relevant matrices from the aligned reads create in the previous step.
