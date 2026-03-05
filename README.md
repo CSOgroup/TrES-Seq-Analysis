@@ -5,7 +5,7 @@ Code repository related to analysing TrES-Seq data
 
 ## Overview
 
-The analysis is made of 2 major parts, preprocessing (*PeprocessingScripts*) and the processing launchers (*ProcessingScripts*). Both are needed to demultiplex the raw reads, align them and process the result into usable matrices and fragment files. These files can then be used as input to reproduce the figures in the publication using the *FiguresScripts*. Alternatively processed files can be downloaded to start at the last step.
+The analysis is made of 2 major parts, preprocessing (*PeprocessingScripts*) and the processing launchers (*ProcessingScripts*). Both are needed to demultiplex the raw reads, align them and process the result into usable matrices and fragment files. These files can then be used as input to reproduce the figures in the publication using the scripts in *FiguresScripts*. Alternatively processed files can be downloaded to directly start at the last step.
 
 ## Step-by-step
 
