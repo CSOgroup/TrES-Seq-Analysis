@@ -14,7 +14,7 @@ A Nextflow pipeline is currently being developed to automate the workflow throug
 ### 1. Data availability
 Raw files are available here:
 
-Processed files - AnnData objects (Scanpy), fragments files (SnapATAC2), and bigwig tracks are available as supplementary files in the GEO repository:
+Processed files - scRNA-seq matrices in 10x mtx format (RNA | [STARSolo](https://github.com/alexdobin/STAR)), fragments files (H3K27ac/H3K27me3 | [SnapATAC2](https://github.com/scverse/SnapATAC2)) are available as supplementary files in the GEO repository:
 
 ### 2. Environment
 All analyses were made using the environment in **env**. To recreate that environment you can use:
