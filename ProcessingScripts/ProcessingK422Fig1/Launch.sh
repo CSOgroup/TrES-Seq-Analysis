@@ -238,23 +238,26 @@ org=Human
     ${refdir}/hg38_bwamem2_index/hg38.fa ${hg38_eff_size}
 
 #RNA
-org=Human
-#/home/annan/ScH2R_TriSeq/AlignRNA.sh ${org} H2RRNA \
-#    H2RRNA_${org}_R1.fq H2RRNA_${org}_R2.fq \
-#    ${refdir}/STARIndex_hg38
 
-/home/annan/ScH2R_TriSeq/AlignRNA.sh ${org} H2RRNA \
-    H2RRNA_${org}_R1.fq H2RRNA_${org}_R2.fq \
-    ${refdir}/refdata-gex-GRCh38-2024-A/star
+# Globally used variables
+libName=H2R_TRISEQ_202409
+outdir="/mnt/dataFast/ahrmad/ScH2R_202409/RNA2"
+refdir="/mnt/dataFast/ahrmad"
 
-org=Mouse
-#/home/annan/ScH2R_TriSeq/AlignRNA.sh ${org} H2RRNA \
-#    H2RRNA_${org}_R1.fq H2RRNA_${org}_R2.fq \
-#    ${refdir}/STARIndex_mm10
+# 5 Alignment and Duplicate detection
 
-/home/annan/ScH2R_TriSeq/AlignRNA.sh ${org} H2RRNA \
-    H2RRNA_${org}_R1.fq H2RRNA_${org}_R2.fq \
-    ${refdir}/refdata-gex-GRCm39-2024-A/star
+RNAsamples=("H2RRNA_Human")
+
+# 
+for RName in "${RNAsamples[@]}"; do
+    echo "Aligning ${RName}..."
+    /home/annan/H2R/AlignRNA.sh ${RName} \
+        ${outdir}/${RName}_R1.fq.gz ${outdir}/${RName}_R2.fq.gz \
+        ${refdir} ${outdir} 64 28
+    
+    echo "Finished aligning ${RName}"
+
+done
 
 # Duplicate detection
 #DNA
@@ -284,69 +287,6 @@ mod=H3K27ac
     -M /mnt/dataFast/ahrmad/triseq_202409/H2RD1_${org}_${mod}.DuplicateMetrics.txt \
     --REMOVE_DUPLICATES false --BARCODE_TAG CB --CREATE_INDEX true --MAX_RECORDS_IN_RAM 10000000
 
-# Spark version does not take BARCODE_TAG parameter... 
-#/mnt/dataFast/ahrmad/gatk-4.6.0.0/gatk MarkDuplicatesSpark \
-#    -I H2RD1_${org}_${mod}.bam -O H2RD1_${org}_${mod}_MarkedDup.bam \
-#    -M /mnt/dataFast/ahrmad/triseq_202409/H2RD1_${org}_${mod}.DuplicateMetrics.txt \
-#    --remove-all-duplicates false --create-output-bam-index --spark-master local[64]
-
-#RNA
-#gtfMM=/mnt/dataFast/ahrmad/MM10_Annot_FromEncode.gtf
-#gtfHG=/mnt/dataFast/ahrmad/HG38_Annot_FromEncode.gtf
-gtfMM=/mnt/dataFast/ahrmad/MM39_Annot_From10x.gtf
-gtfHG=/mnt/dataFast/ahrmad/HG38_Annot_From10x.gtf
-
-featureCounts -T 64 -p -O -g gene_name -t gene -a ${gtfMM} -o H2RRNA_Mouse_gene_assigned -R BAM H2RRNA_Mouse_NameSortedGood_Tagged.bam
-samtools sort --threads 64 -m 3G H2RRNA_Mouse_NameSortedGood_Tagged.bam.featureCounts.bam -o H2RRNA_Mouse_CoordSortedGood_Tagged_Assigned.bam
-samtools index --threads 64 H2RRNA_Mouse_CoordSortedGood_Tagged_Assigned.bam
-rm H2RRNA_Mouse_NameSortedGood_Tagged.bam.featureCounts.bam H2RRNA_Mouse_NameSortedGood_Tagged.bam
-
-featureCounts -T 48 -p -O -g gene_name -t gene -a ${gtfHG} -o H2RRNA_Human_gene_assigned -R BAM H2RRNA_Human_NameSortedGood_Tagged.bam
-samtools sort --threads 48 -m 3G H2RRNA_Human_NameSortedGood_Tagged.bam.featureCounts.bam -o H2RRNA_Human_CoordSortedGood_Tagged_Assigned.bam
-samtools index --threads 64 H2RRNA_Human_CoordSortedGood_Tagged_Assigned.bam
-rm H2RRNA_Human_NameSortedGood_Tagged.bam.featureCounts.bam H2RRNA_Human_NameSortedGood_Tagged.bam
-
-exp=("H2RRNA")
-org=("Human" "Mouse")
-
-for e in "${exp[@]}"; do
-    for o in "${org[@]}"; do
-        echo ${e}_${o}
-        # umi_tools count
-        umi_tools count --stdin=${e}_${o}_CoordSortedGood_Tagged_Assigned.bam \
-            --log=${e}_${o}_UMIToolsLogCount.txt \
-            --wide-format-cell-counts \
-            --extract-umi-method=tag \
-            --umi-tag=UM \
-            --edit-distance-threshold=1 \
-            --spliced-is-unique \
-            --per-cell --cell-tag=CB \
-            --per-gene --gene-tag=XT --assigned-status-tag=XS \
-            --paired \
-            --random-seed=42 \
-            --stdout=${e}_${o}_NoDupUMI_count.tsv
-
-        # umi_tools dedup
-        umi_tools dedup --stdin=${e}_${o}_CoordSortedGood_Tagged_Assigned.bam \
-            --log=${e}_${o}_UMIToolsLogPerCellPerGene.txt \
-            --output-stats=${e}_${o}_UMIToolsStatsPerCellPerGene.txt \
-            --extract-umi-method=tag \
-            --umi-tag=UM \
-            --edit-distance-threshold=1 \
-            --spliced-is-unique \
-            --multimapping-detection-method=NH \
-            --per-cell --cell-tag=CB \
-            --per-gene --gene-tag=XT --assigned-status-tag=XS \
-            --paired \
-            --buffer-whole-contig \
-            --random-seed=42 \
-            --stdout=${e}_${o}_NoDupUMI_dedupPerCellPerGene.bam
-    done
-done
-
-samtools index --threads 64 H2RRNA_Human_NoDupUMI_dedupPerCellPerGene.bam
-samtools index --threads 64 H2RRNA_Mouse_NoDupUMI_dedupPerCellPerGene.bam
-
 # Merging Alignments for stats
 #samtools merge --threads 64 -o H2RD1_Human_MarkedDup.bam H2RD1_Human_H3K27ac_MarkedDup.bam H2RD1_Human_H3K27me3_MarkedDup.bam
 #samtools index --threads 64 --bai --output H2RD1_Human_MarkedDup.bam.bai H2RD1_Human_MarkedDup.bam
@@ -367,122 +307,3 @@ samtools index --threads 64 --bai --output H2RD1_Human_H3K27ac_NoDup.bam.bai H2R
 samtools view --threads 64 --bam --with-header --require-flags 0x400 --output DUP.bam --unoutput H2RD1_Human_H3K27me3_NoDup.bam H2RD1_Human_H3K27me3_MarkedDup.bam
 samtools index --threads 64 --bai --output H2RD1_Human_H3K27me3_NoDup.bam.bai H2RD1_Human_H3K27me3_NoDup.bam
 rm DUP.bam
-
-
-# Plot Making
-python ./Make_Plots.py
-
-macs3 callpeak --treatment H2RD1_Human_H3K27ac_CountFiltered.bam --format BAMPE \
-	--name ac --outdir ac_macs3_50kbg \
-	--gsize hs --keep-dup all \
-	--llocal 50000 --min-length 600 --max-gap 300 \
-	--cutoff-analysis
-
-macs3 callpeak --treatment H2RD1_Human_H3K27me3_CountFiltered.bam --format BAMPE \
-	--name me3 --outdir me3_macs3_q005_broad \
-	--gsize hs --keep-dup all --broad \
-	--llocal 1000000 --min-length 3000 --max-gap 1000 --qvalue 0.05 \
-	--cutoff-analysis
-
-
-# Making BigWig tracks
-bamCoverage -p 64 -bs 10 --smoothLength 100 --normalizeUsing RPKM --extendReads --centerReads -b H2RD1_Human_H3K27ac_NoDup.bam -o H2RD1_Human_H3K27ac_NoDup_RPKM.bw -of bigwig --effectiveGenomeSize 2913022398
-bamCoverage -p 64 -bs 10 --smoothLength 100 --normalizeUsing RPKM --extendReads --centerReads -b H2RD1_Human_H3K27me3_NoDup.bam -o H2RD1_Human_H3K27me3_NoDup_RPKM.bw -of bigwig --effectiveGenomeSize 2913022398
-
-bamCoverage -p 64 -bs 10 --smoothLength 100 --normalizeUsing RPKM --extendReads --centerReads -b H2RD1_Human_H3K27ac_Post.bam -o H2RD1_Human_H3K27ac_Post_RPKM.bw -of bigwig --effectiveGenomeSize 2913022398
-bamCoverage -p 64 -bs 10 --smoothLength 100 --normalizeUsing RPKM --extendReads --centerReads -b H2RD1_Human_H3K27me3_Post.bam -o H2RD1_Human_H3K27me3_Post_RPKM.bw -of bigwig --effectiveGenomeSize 2913022398
-
-bamCoverage -p 64 -bs 10 --smoothLength 100 --normalizeUsing RPKM -b H2RRNA_Human_NoDupUMI_dedupPerCellPerGene.bam -o H2RRNA_Human_NoDupUMI_dedupPerCellPerGene_RPKM.bw -of bigwig --effectiveGenomeSize 2913022398
-bamCoverage -p 64 -bs 10 --smoothLength 100 --normalizeUsing RPKM -b H2RRNA_Human_Post.bam -o H2RRNA_Human_Post_RPKM.bw -of bigwig --effectiveGenomeSize 2913022398
-
-bamCoverage -p 64 -bs 10 --smoothLength 100 --normalizeUsing RPKM -b /mnt/data3/evotrack/Natalaya/k422/cellranger_pooled_output/pool_K422_DMSO_exp3000/outs/possorted_genome_bam.bam -o ScRNA_Natalya.bw -of bigwig --effectiveGenomeSize 2913022398
-
-#RNA
-
-#################################################
-################## BUILD BAMs ###################
-#################################################
-
-# BASH
-#exps=("H2RD1_Human_H3K27me3" "H2RD1_Human_H3K27ac")
-#for e in "${exps[@]}"; do
-#    samtools view --threads 64 --with-header --read-group-file ${e}_Post_cell_names.lst --output ${e}_Post.bam ${e}_NoDup.bam
-#    samtools index --threads 64 ${e}_Post.bam
-#done
-#
-#exps=("H2RRNA_Human")
-#for e in "${exps[@]}"; do
-#    samtools view --threads 64 --with-header --read-group-file ${e}_Post_cell_names.lst --output ${e}_Post.bam ${e}_NoDupUMI_dedupPerCellPerGene.bam
-#    samtools index --threads 64 ${e}_Post.bam
-#done
-
- #Build Strander Signal tracks from RNA
-
-
-# Define the array of BAM file names
-RNA_BAM_Names=( "H2RRNA_Human_Post.bam" "H2RRNA_Human_NoDupUMI_dedupPerCellPerGene.bam" "H2RRNA_Human_CoordSortedGood_Tagged_Assigned.bam" )
-RNA_BAM_Names=( "10x_ScRNA.bam" )
-
-refdir="/mnt/dataFast/ahrmad"
-
-# Function to process each BAM file
-process_bam() {
-    RName=$1
-    refdir=$2
-
-    STAR --runMode inputAlignmentsFromBAM \
-    --inputBAMfile ${RName} \
-    --outWigType bedGraph \
-    --outWigStrand Stranded \
-    --outWigReferencesPrefix chr \
-    --outFileNamePrefix ${RName}
-
-    rm ${RName}Signal.Unique.str*.out.bg
-    sortBed -i ${RName}Signal.UniqueMultiple.str1.out.bg > ${RName}Signal.Str1Sorted.bg
-    sortBed -i ${RName}Signal.UniqueMultiple.str2.out.bg > ${RName}Signal.Str2Sorted.bg
-    bedGraphToBigWig ${RName}Signal.Str1Sorted.bg ${refdir}/hg38.chrom.sizes ${RName}_minus.bw
-    bedGraphToBigWig ${RName}Signal.Str2Sorted.bg ${refdir}/hg38.chrom.sizes ${RName}_plus.bw
-
-    mv "${RName}_plus.bw" "${RName/.bam/}_plus.bw"
-    mv "${RName}_minus.bw" "${RName/.bam/}_minus.bw"
-    
-    rm ${RName}Signal.Str*Sorted.bg ${RName}Signal.UniqueMultiple.str*.out.bg ${RName}Log.out
-}
-
-# Export the function and variables so they can be used by GNU Parallel
-export -f process_bam
-export refdir
-
-# Use GNU Parallel to run the function in parallel
-parallel --jobs 6 process_bam ::: "${RNA_BAM_Names[@]}" ::: "$refdir"
-
-
-
-
-
-#NEW RNA LAUNCH
-#SCH2R_202409
-
-#!/bin/bash
-
-set -euo pipefail
-
-# Globally used variables
-libName=H2R_TRISEQ_202409
-outdir="/mnt/dataFast/ahrmad/ScH2R_202409/RNA2"
-refdir="/mnt/dataFast/ahrmad"
-
-# 5 Alignment and Duplicate detection
-
-RNAsamples=("H2RRNA_Human")
-
-# 
-for RName in "${RNAsamples[@]}"; do
-    echo "Aligning ${RName}..."
-    /home/annan/H2R/AlignRNA.sh ${RName} \
-        ${outdir}/${RName}_R1.fq.gz ${outdir}/${RName}_R2.fq.gz \
-        ${refdir} ${outdir} 64 28
-    
-    echo "Finished aligning ${RName}"
-
-done
