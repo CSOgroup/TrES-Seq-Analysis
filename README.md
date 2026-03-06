@@ -5,7 +5,7 @@ Code repository related to analysing TrES-Seq data
 
 ## Overview
 
-The analysis is made of 2 major parts, preprocessing (*PeprocessingScripts*) and the processing launchers (*ProcessingScripts*). The preprocessing scripts are needed for the launchers to demultiplex the raw reads, align them and process the result into usable matrices and fragment files. These files can then be used as input to reproduce the figures in the publication using the scripts in *FiguresScripts*. Alternatively processed files can be downloaded to directly start at the last step.
+The analysis is made of 2 major parts, preprocessing (**PeprocessingScripts**) and the launchers (**ProcessingScripts**). The preprocessing scripts are needed for the launchers to demultiplex the raw reads, align them and process the result into usable matrices and fragment files. These files can then be used as input to reproduce the figures in the publication using the scripts in **FiguresScripts**. Alternatively processed files can be downloaded to directly start at the last step.
 
 A Nextflow pipeline is currently being developed to automate the workflow through to the production of processed matrices.
 
@@ -17,7 +17,7 @@ Raw files are available here:
 Processed files - AnnData objects (Scanpy), fragments files (SnapATAC2), and bigwig tracks are available as supplementary files in the GEO repository:
 
 ### 2. Environment
-All analyses were made using the environment in *env*. To recreate that environment you can use:
+All analyses were made using the environment in **env**. To recreate that environment you can use:
 ```
 conda env create -f env/environment.yaml
 ```
@@ -27,4 +27,4 @@ To preprocess the raw fastq files you will need to install [Codon](https://githu
 To run a script, you will need to open it to modify the path to the input files of that script and the required accompanying scripts (only for preprocessing).
 
 ### 4. Raw reads processing
-Before starting the preprocessing, first use the scripts in the _GenerateSTARSoloGenome_ folder to create the proper STAR genomes that will be used during processing. Then to process a specific dataset, use *Launch.sh* inside the corresponding folder in *ProcessingScripts*. The attached whitelists *WLs* are required to demultiplex the reads. You can then use *PostProcessing.py* to obtain the relevant matrices from the aligned reads create in the previous step.
+Before starting the preprocessing, first use the scripts in the **PeprocessingScripts/GenerateSTARSoloGenome** folder to create the proper STAR genomes that will be used during processing. Then to process a specific dataset, use *Launch.sh* inside the corresponding folder in **ProcessingScripts**. The attached whitelists *WLs* are required to demultiplex the reads. You can then use *PostProcessing.py* to obtain the relevant matrices from the aligned reads create in the previous step.
