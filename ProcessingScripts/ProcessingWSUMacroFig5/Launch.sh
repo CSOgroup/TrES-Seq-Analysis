@@ -280,8 +280,6 @@ done
 mkdir -p ${outdir}/stats
 mv ${outdir}/Reads_Per_Barcode_Sc_* ${outdir}/stats
 mv ${outdir}/Barcode_Statistics_Sc_* ${outdir}/stats
-python ./mm.py
-
 
 
 
