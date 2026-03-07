@@ -2,9 +2,6 @@
 
 set -e
 
-# Get seq data from EPFL GECF facility
-#echo "ls AVT0369/Fastq/FilterOnR1" | sftp -q -P 22 sftpgecf@svsftp.epfl.ch
-#sftp -P 22 -B 262144 -R 64 -r #sftpgecf@svsftp.epfl.ch:AVT0369/Fastq/FilterOnR1/ .
 
 # Globally used variables
 XDir=/mnt/dataFast/ahrmad/triseq_202510
