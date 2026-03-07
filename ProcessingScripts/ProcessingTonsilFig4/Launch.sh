@@ -14,18 +14,8 @@ DNA_Tonsil=( "Sc_VTD9_S1" "Sc_VTD11_S2")
 RNA_Tonsil=( "Sc_VTr10_S2" "Sc_VTr12_S3" )
 
 
-
-
 # Create output directory
 mkdir -p ${outdir}
-
-# 0 Env setup
-#mm env create -n t2
-# Launch
-#mm install samtools screen bwa-mem2 pandas polars ipython pysam pybedtools numpy matplotlib seaborn scipy pyarrow star==2.7.1a umi_tools==1.1.5 fastqc multiqc trim-galore deeptools subread coreutils parallel upsetplot ucsc-bedGraphToBigWig
-# analysis
-#mm install snapatac2 anndata scanpy matplotlib-venn leidenalg bbknn
-
 
 # 1 QC
 # Fastqc MultiQC pre trimmd
