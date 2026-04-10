@@ -5,9 +5,9 @@ Code repository related to analysing TrES-Seq data
 
 ## Overview
 
-The analysis is made of 2 major parts, preprocessing (**PeprocessingScripts**) and the launchers (**ProcessingScripts**). The preprocessing scripts are needed for the launchers to demultiplex the raw reads, align them and process the result into usable matrices and fragment files. These files can then be used as input to reproduce the figures in the publication using the scripts in **FiguresScripts**. Alternatively processed files can be downloaded to directly start at the last step.
+The analysis consists of two main parts. First, the launcher scripts in **ProcessingScripts** take the raw reads, align them, and process the output into usable matrices and fragment files. These files can also be downloaded directly from GEO under **GSE324511**. They are then used as input for the scripts in **FiguresScripts**, which reproduce the figures shown in the publication.
 
-A Nextflow pipeline is currently being developed to automate the workflow through to the production of processed matrices.
+A Nextflow pipeline has been developed to automate the workflow from raw FASTQs through to the production of processed matrices, it lives here: [TrESFlow](https://github.com/CSOgroup/TrESFlow)
 
 ## Step-by-step
 
