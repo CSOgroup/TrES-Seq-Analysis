@@ -5,26 +5,24 @@ Code repository related to analysing TrES-Seq data
 
 ## Overview
 
-The analysis consists of two main parts. First, the launcher scripts in **ProcessingScripts** take FASTQ reads, align them, and process the output into usable matrices and fragment files. These files can also be downloaded directly from GEO under **GSE324511**. They are then used as input for the scripts in **FiguresScripts**, which reproduce the figures shown in the publication.
+The analysis is organized into two stages.
 
-A Nextflow pipeline has been developed to automate the workflow from raw FASTQs through to the production of processed matrices, it lives here: [TrESFlow](https://github.com/CSOgroup/TrESFlow)
+First, FASTQ reads are processed into matrices and fragment files using the automated [TrESFlow pipeline](https://github.com/CSOgroup/TrESFlow). These outputs are also available from GEO under **GSE324511**.
+
+Second, the matrices and fragment files are used as input for the Python scripts in **ProcessingScripts**, which perform QC and clustering. The resulting processed data are then used by **FiguresScripts** to reproduce the figures in the publication.
 
 ## Step-by-step
 
 ### 1. Data availability
-Raw files are available on GEO under the Accession Number: **GSE324511**.
-
-Processed files - scRNA-seq matrices in 10x mtx format (RNA | [STARSolo](https://github.com/alexdobin/STAR)), fragments files (H3K27ac/H3K27me3 | [SnapATAC2](https://github.com/scverse/SnapATAC2)) are available as supplementary files on the same GEO repository.
+Unprocessed (Sample-split FASTQs) and processed files (scRNA-seq matrices | [STARSolo](https://github.com/alexdobin/STAR) & H3K27ac/H3K27me3/H3K9me3 fragments files | [SnapATAC2](https://github.com/scverse/SnapATAC2)) are available on GEO under the Accession Number: **GSE324511**.
 
 ### 2. Environment
 All analyses were made using the environment in **env**. To recreate that environment you can use:
 ```
 conda env create -f env/environment.yaml
 ```
-To preprocess the raw fastq files you will need to install [Codon](https://github.com/exaloop/codon) and [Seq](https://github.com/exaloop/seq), in addition to this environment. To install them, follow the instructions listed in the links.
-
 ### 3. Modify the config
-To run a script, you will need to open it to modify the path to the input files of that script and the required accompanying scripts (only for preprocessing).
+To run a script, you will need to open it to modify the path to the input files of that script.
 
-### 4. Raw reads processing
-Before starting the preprocessing, first use the scripts in the **PeprocessingScripts/GenerateSTARSoloGenome** folder to create the proper STAR genomes that will be used during processing. Then to process a specific dataset, use *Launch.sh* inside the corresponding folder in **ProcessingScripts**. The attached whitelists *WLs* are required to demultiplex the reads. You can then use *PostProcessing.py* to obtain the relevant matrices from the aligned reads create in the previous step.
+### 4. Raw non-demultiplexed reads processing
+If you'd like to run the analyses from scratch using the non-demultiplexed FASTQs, use the [TrESFlow pipeline](https://github.com/CSOgroup/TrESFlow) and ask us for the raw non-demultiplexed FASTQ files at ***ahrmad . annan @ unil . ch***
