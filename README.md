@@ -13,4 +13,4 @@ Analysis code for the TrES-Seq paper. Each folder's README lists the inputs, sof
 
 The GEO accession for the study's sample-split FASTQs, RNA count matrices and histone-mark fragment files is [GSE324511](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE324511).
 
-Use [TrESFlow](https://github.com/CSOgroup/TrESFlow) to process FASTQs. For the original, non-demultiplexed FASTQs, contact [ahrmad.annan@unil.ch](mailto:ahrmad.annan@unil.ch).
+Use [TrESFlow](https://github.com/CSOgroup/TrESFlow) to process FASTQs. For the original, non-demultiplexed FASTQs, contact **ahrmad . annan @ unil . ch**.
