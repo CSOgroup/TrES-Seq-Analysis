@@ -1,28 +1,16 @@
 # Transcriptional and Epigenetic State by Sequencing (TrES-Seq)
 
-Code repository related to analysing TrES-Seq data
+Analysis code for the TrES-Seq paper. Each folder's README lists the inputs, software and commands for that analysis.
 
+| Folder | Analysis |
+| --- | --- |
+| [Benchmarking](Benchmarking/) | Benchmark comparisons, cross-mark profiles, correlations and single-cell tracks |
+| [Tonsil_Analysis](Tonsil_Analysis/) | Processing and downstream analysis of four human tonsil samples |
+| [EZH2i_Treatment_Fig4gh](EZH2i_Treatment_Fig4gh/) | Pseudobulk RNA differential expression after four days of EZH2 inhibition versus DMSO (Fig. 4g,h) |
+| [Suppl_Fig3](Suppl_Fig3/) | Cell-line mixture analysis and histone-mark profiles (Supplementary Fig. 3) |
 
-## Overview
+## Data and preprocessing
 
-The analysis is organized into two stages.
+The GEO accession for the study's sample-split FASTQs, RNA count matrices and histone-mark fragment files is [GSE324511](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE324511).
 
-First, FASTQ reads are processed into matrices and fragment files using the automated [TrESFlow pipeline](https://github.com/CSOgroup/TrESFlow). These outputs are also available from GEO under **GSE324511**.
-
-Second, the matrices and fragment files are used as input for the Python scripts in **ProcessingScripts**, which perform QC and clustering. The resulting processed data are then used by **FiguresScripts** to reproduce the figures in the publication.
-
-## Step-by-step
-
-### 1. Data availability
-Unprocessed (Sample-split FASTQs) and processed files (scRNA-seq matrices | [STARSolo](https://github.com/alexdobin/STAR) & H3K27ac/H3K27me3/H3K9me3 fragments files | [SnapATAC2](https://github.com/scverse/SnapATAC2)) are available on GEO under the Accession Number: **GSE324511**.
-
-### 2. Environment
-All analyses were made using the environment in **env**. To recreate that environment you can use:
-```
-conda env create -f env/environment.yaml
-```
-### 3. Modify the config
-To run a script, you will need to open it to modify the path to the input files of that script.
-
-### 4. Raw non-demultiplexed reads processing
-If you'd like to run the analyses from scratch using the non-demultiplexed FASTQs, use the [TrESFlow pipeline](https://github.com/CSOgroup/TrESFlow) and ask us for the raw non-demultiplexed FASTQ files at ***ahrmad . annan @ unil . ch***
+Use [TrESFlow](https://github.com/CSOgroup/TrESFlow) to process FASTQs. For the original, non-demultiplexed FASTQs, contact [quentin.dupont@epfl.ch](mailto:ahrmad.annan@unil.ch).
