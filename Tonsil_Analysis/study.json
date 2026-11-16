@@ -1,0 +1,409 @@
+{
+  "tresflow_root": "inputs/tresflow",
+  "reference_dir": "inputs/references",
+  "output_root": "results",
+  "threads": 22,
+  "references": {
+    "lymphoid": {
+      "file": "GSE269695_sc_reference.h5ad",
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE269nnn/GSE269695/suppl/GSE269695_sc_reference.h5ad"
+    },
+    "chrom_sizes": {
+      "file": "hg38.chrom.sizes",
+      "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chrom.sizes"
+    },
+    "blacklist": {
+      "file": "hg38-blacklist.v2.bed",
+      "url": "https://raw.githubusercontent.com/Boyle-Lab/Blacklist/d0527cdea356bf57d30535b48783804ca8d21031/lists/hg38-blacklist.v2.bed.gz",
+      "gunzip": true,
+      "sha256": "c92e763af17271446194991e71917ac220593a5a3d40a06667be24178ef08cf2"
+    },
+    "tss_annotation": {
+      "file": "genes.gtf.gz",
+      "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/genes/hg38.knownGene.gtf.gz"
+    },
+    "effect_annotation": {
+      "file": "HG38_GRCh38.p14_gencode.v46.chr_patch_hapl_scaff.annotation.gtf.gz",
+      "url": "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_46/gencode.v46.chr_patch_hapl_scaff.annotation.gtf.gz"
+    },
+    "linked_enhancers": {
+      "file": "Sungalee_2021_MERs.hg38.proximity_100kb.bed"
+    }
+  },
+  "label_column": "new_celltype",
+  "exclude_reference_labels": [
+    "Tumor"
+  ],
+  "rna_doublets": {
+    "max_score": 70
+  },
+  "samples": [
+    {
+      "name": "Tonsil1",
+      "libraries": {
+        "VTD11_VTR12_B": [
+          "H3K27ac",
+          "H3K27me3"
+        ],
+        "VTD9_VTR10_A": [
+          "H3K27ac",
+          "H3K27me3"
+        ]
+      },
+      "quality": {
+        "H3K27ac": {
+          "max_fragments": 15000,
+          "min_fragments": 300
+        },
+        "H3K27me3": {
+          "max_fragments": 20000,
+          "min_fragments": 300
+        },
+        "RNA": {
+          "max_genes": 8000,
+          "max_hb": 5.0,
+          "max_mt": 8.0,
+          "max_rb": 1.5,
+          "max_top50": 30.0,
+          "max_umi": 10000,
+          "min_genes": 0,
+          "min_umi": 300
+        }
+      },
+      "signal_cutoffs": {
+        "H3K27ac": 850,
+        "H3K27me3": 850
+      },
+      "tagmentation_protocol": "SingleTag",
+      "smoothing": {
+        "fine_resolution": 3,
+        "min_cluster_cells": 10,
+        "min_cluster_majority": 0.6,
+        "min_neighbor_majority": 0.55,
+        "min_labeled_neighbors": 5,
+        "max_same_label_neighbors": 1000000000,
+        "max_changed_fraction": 1
+      }
+    },
+    {
+      "name": "Tonsil2",
+      "libraries": {
+        "VTD1_VTr1_A": [
+          "H3K27ac",
+          "H3K27me3"
+        ],
+        "VTD4T_VTR4F_B": [
+          "H3K27ac",
+          "H3K27me3"
+        ]
+      },
+      "quality": {
+        "H3K27ac": {
+          "max_fragments": 10000,
+          "min_fragments": 300
+        },
+        "H3K27me3": {
+          "max_fragments": 15000,
+          "min_fragments": 300
+        },
+        "RNA": {
+          "max_genes": 8000,
+          "max_hb": 5.0,
+          "max_mt": 8.0,
+          "max_rb": 1.5,
+          "max_top50": 40.0,
+          "max_umi": 10000,
+          "min_genes": 0,
+          "min_umi": 300
+        }
+      },
+      "signal_cutoffs": {
+        "H3K27ac": 100,
+        "H3K27me3": 300
+      },
+      "tagmentation_protocol": "SingleTag",
+      "smoothing": {
+        "fine_resolution": 5,
+        "min_cluster_cells": 10,
+        "min_cluster_majority": 0.51,
+        "min_neighbor_majority": 0.51,
+        "min_labeled_neighbors": 5,
+        "max_same_label_neighbors": 1000000000,
+        "max_changed_fraction": 1
+      }
+    },
+    {
+      "name": "Tonsil3",
+      "libraries": {
+        "TP3_1_K27me3_K27ac": [
+          "H3K27ac",
+          "H3K27me3"
+        ],
+        "TP3_1_K27me3_K9me3": [
+          "H3K27me3",
+          "H3K9me3"
+        ],
+        "TP3_3_K27me3_K27ac": [
+          "H3K27ac",
+          "H3K27me3"
+        ],
+        "TP3_3_K27me3_K9me3": [
+          "H3K27me3",
+          "H3K9me3"
+        ],
+        "TP3_4_K27me3_K27ac": [
+          "H3K27ac",
+          "H3K27me3"
+        ],
+        "TP3_4_K27me3_K9me3": [
+          "H3K27me3",
+          "H3K9me3"
+        ],
+        "TP3_6_K27me3_K27ac": [
+          "H3K27ac",
+          "H3K27me3"
+        ],
+        "TP3_6_K27me3_K9me3": [
+          "H3K27me3",
+          "H3K9me3"
+        ]
+      },
+      "quality": {
+        "H3K27ac": {
+          "max_fragments": 15000,
+          "min_fragments": 300
+        },
+        "H3K27me3": {
+          "max_fragments": 15000,
+          "min_fragments": 300
+        },
+        "H3K9me3": {
+          "max_fragments": 15000,
+          "min_fragments": 300
+        },
+        "RNA": {
+          "max_genes": 8000,
+          "max_hb": 5.0,
+          "max_mt": 8.0,
+          "max_rb": 1.5,
+          "max_top50": 40.0,
+          "max_umi": 10000,
+          "min_genes": 0,
+          "min_umi": 300
+        }
+      },
+      "signal_cutoffs": {
+        "H3K27ac": 0,
+        "H3K27me3": 300,
+        "H3K9me3": 400
+      },
+      "tagmentation_protocol": "DualTag",
+      "smoothing": {
+        "fine_resolution": 3,
+        "min_cluster_cells": 10,
+        "min_cluster_majority": 0.51,
+        "min_neighbor_majority": 0.7,
+        "min_labeled_neighbors": 5,
+        "max_same_label_neighbors": 1000000000,
+        "max_changed_fraction": 1
+      }
+    },
+    {
+      "name": "Tonsil4",
+      "libraries": {
+        "TP4_1_K27me3_K27ac": [
+          "H3K27ac",
+          "H3K27me3"
+        ],
+        "TP4_1_K27me3_K9me3": [
+          "H3K27me3",
+          "H3K9me3"
+        ],
+        "TP4_2_K27me3_K27ac": [
+          "H3K27ac",
+          "H3K27me3"
+        ],
+        "TP4_2_K27me3_K9me3": [
+          "H3K27me3",
+          "H3K9me3"
+        ],
+        "TP4_5_K27me3_K27ac": [
+          "H3K27ac",
+          "H3K27me3"
+        ],
+        "TP4_5_K27me3_K9me3": [
+          "H3K27me3",
+          "H3K9me3"
+        ]
+      },
+      "quality": {
+        "H3K27ac": {
+          "max_fragments": 15000,
+          "min_fragments": 300
+        },
+        "H3K27me3": {
+          "max_fragments": 15000,
+          "min_fragments": 300
+        },
+        "H3K9me3": {
+          "max_fragments": 15000,
+          "min_fragments": 300
+        },
+        "RNA": {
+          "max_genes": 8000,
+          "max_hb": 5.0,
+          "max_mt": 8.0,
+          "max_rb": 1.5,
+          "max_top50": 40.0,
+          "max_umi": 10000,
+          "min_genes": 0,
+          "min_umi": 300
+        }
+      },
+      "signal_cutoffs": {
+        "H3K27ac": 0,
+        "H3K27me3": 300,
+        "H3K9me3": 400
+      },
+      "tagmentation_protocol": "DualTag",
+      "smoothing": {
+        "fine_resolution": 2,
+        "min_cluster_cells": 10,
+        "min_cluster_majority": 0.51,
+        "min_neighbor_majority": 0.51,
+        "min_labeled_neighbors": 5,
+        "max_same_label_neighbors": 1000000000,
+        "max_changed_fraction": 1
+      }
+    }
+  ],
+  "rna_processing": {
+    "hvg_batch_key": null,
+    "hvg_flavor": "seurat_v3",
+    "hvg_span": 0.3,
+    "metric": "cosine",
+    "min_cells_per_gene": 2,
+    "min_dist": 0.5,
+    "n_hvg": 2000,
+    "n_neighbors": 15,
+    "n_pcs": 20,
+    "pca_solver": "randomized",
+    "scale_max_value": 6,
+    "seed": 0,
+    "spread": 1.0,
+    "target_sum": 10000
+  },
+  "dna_processing": {
+    "tile_size": {
+      "H3K27ac": 1000,
+      "H3K27me3": 10000,
+      "H3K9me3": 10000
+    },
+    "genome_size": "hs",
+    "peak_calling": {
+      "H3K27ac": {
+        "broad": false,
+        "qvalue": 1e-05
+      },
+      "H3K27me3": {
+        "broad": true,
+        "broad_cutoff": 0.1,
+        "qvalue": 1e-05
+      },
+      "H3K9me3": {
+        "broad": true,
+        "broad_cutoff": 0.1,
+        "qvalue": 1e-05
+      }
+    }
+  },
+  "embedding": {
+    "batch_key": "tagmentation_protocol",
+    "dna": {
+      "exclude_chromosomes": [
+        "chrM",
+        "MT",
+        "M"
+      ],
+      "features": {
+        "H3K27ac": 300000,
+        "H3K27me3": 100000,
+        "H3K9me3": 100000
+      },
+      "harmony": {
+        "max_iter_harmony": 30,
+        "theta": 2.0
+      },
+      "min_dist": 0.3,
+      "n_components": 30,
+      "n_neighbors": 50
+    },
+    "leiden_resolutions": [
+      1,
+      1.5,
+      2,
+      3
+    ],
+    "rna": {
+      "min_dist": 0.4,
+      "n_components": 30,
+      "n_hvg": 3000,
+      "n_neighbors": 30
+    },
+    "seed": 0
+  },
+  "palette": {
+    "B_Cycling": "#00bfc4",
+    "B_GC_DZ": "#98df8a",
+    "B_GC_LZ": "#2ca02c",
+    "B_mem": "#2b8c9e",
+    "B_naive": "#1f77b4",
+    "B_plasma": "#76c1ff",
+    "DC": "#b39b00",
+    "DC_CDC2": "#806c00",
+    "FDC": "#7b1fa2",
+    "ILC": "#000000",
+    "Macrophages": "#8c564b",
+    "Monocytes": "#000000",
+    "NK": "#000000",
+    "NKT": "#000000",
+    "T_CD4+": "#d62728",
+    "T_CD4+_TfH": "#e377c2",
+    "T_CD4+_TfH_GC": "#c05aa0",
+    "T_CD4+_naive": "#ff9896",
+    "T_CD8+": "#ff7f0e",
+    "T_TIM3+": "#000000",
+    "Unlabelled": "#BDBDBD"
+  },
+  "pairwise": {
+    "datasets": [
+      "merged",
+      "Tonsil1"
+    ],
+    "pairs": [
+      [
+        "B_mem",
+        "B_naive"
+      ],
+      [
+        "B_mem",
+        "T_CD4+_TfH"
+      ],
+      [
+        "T_CD4+_naive",
+        "T_CD4+_TfH"
+      ],
+      [
+        "T_CD4+",
+        "T_CD4+_TfH_GC"
+      ]
+    ]
+  },
+  "dz_lz": {
+    "gene_body_flank_bp": 1000,
+    "effect_gene_body_flank_bp": 2000,
+    "effect_genes_per_direction": 15,
+    "effect_rank_by_fdr": true,
+    "include_h3k9me3": true
+  }
+}

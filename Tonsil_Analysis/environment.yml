@@ -1,0 +1,36 @@
+name: tonsil-analysis
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.12
+  - pip
+  - r-base=4.5
+  - bioconductor-deseq2=1.50.2
+  - bedtools=2.31.1
+  - macs3=3.0
+  - c-compiler
+  - cxx-compiler
+  - numpy>=2.2,<2.6
+  - pandas>=2.2,<3
+  - scipy>=1.14,<1.19
+  - h5py
+  - matplotlib-base
+  - scikit-learn
+  - scikit-misc
+  - python-igraph
+  - leidenalg
+  - threadpoolctl
+  - pytorch
+  - pip:
+      - anndata==0.13.3.post0
+      - scanpy==1.12.4
+      - scvi-tools==1.5.1
+      - snapatac2==2.10.0
+      - harmonypy==2.1.0
+      - DoubletDetection==4.3.0.post1
+      - umap-learn==0.5.12
+      - ncls==0.0.71
+      - hdf5plugin
+      - matplotlib-venn
