@@ -5,8 +5,7 @@
   "threads": 22,
   "references": {
     "lymphoid": {
-      "file": "GSE269695_sc_reference.h5ad",
-      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE269nnn/GSE269695/suppl/GSE269695_sc_reference.h5ad"
+      "file": "GSE269695_sc_reference.h5ad"
     },
     "chrom_sizes": {
       "file": "hg38.chrom.sizes",
@@ -294,6 +293,7 @@
     "target_sum": 10000
   },
   "dna_processing": {
+    "bam_suffix": "NoDup",
     "tile_size": {
       "H3K27ac": 1000,
       "H3K27me3": 10000,

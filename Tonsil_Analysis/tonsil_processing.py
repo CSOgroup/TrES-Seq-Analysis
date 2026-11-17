@@ -235,6 +235,10 @@ def log(message):
 
 
 def thread_budget(n):
+    # Scanpy's neighbor reader still uses the sparse-matrix nnz API.
+    for cls in (sp.csr_array, sp.csc_array):
+        if not hasattr(cls, 'getnnz'):
+            cls.getnnz = cls._getnnz
     for key in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMBA_NUM_THREADS','RAYON_NUM_THREADS'):
         os.environ[key] = str(n)
     from threadpoolctl import threadpool_limits
@@ -328,7 +332,10 @@ def rna_paths(config, sample, library):
 
 
 def bam_path(config, sample, library, mark):
-    return config['tresflow'] / sample / 'dna_align' / f'{library}_{mark}_MarkedDup.bam'
+    suffix = config['dna_processing'].get('bam_suffix', 'NoDup')
+    if suffix not in ('NoDup', 'MarkedDup'):
+        raise ValueError("dna_processing.bam_suffix must be 'NoDup' or 'MarkedDup'")
+    return config['tresflow'] / sample / 'dna_align' / f'{library}_{mark}_{suffix}.bam'
 
 
 def processing_paths(output, sample):
@@ -1594,6 +1601,7 @@ def transfer(reference, query, folder):
     ref.obs[BATCH_KEY] = 'ref'
     q.obs[BATCH_KEY] = 'query'
     q.obs[SCANVI_LABEL_KEY] = UNLABELED
+    ref.obs['_cell_id'] = ref.obs_names.astype(str)
     q.obs['_cell_id'] = q.obs_names.astype(str)
     combined = ad.concat([ref,q],label='source',keys=['ref','query'],join='inner',
                          index_unique='__',merge='same')
@@ -1659,8 +1667,49 @@ def smooth_labels(obs, graph, clusters, options):
     return [order[i] if i>=0 else None for i in codes], changed
 
 
+def prediction_stamp(config, sample):
+    functions = (transfer, raw_count_anndata, matrix_is_counts, harmonize_genes,
+                 clean_gene_name, collapse_duplicate_genes, collapse_clean_genes,
+                 probability_frame, filter_reference)
+    constants = {key:globals()[key] for key in (
+        'SCANVI_LABEL_KEY','BATCH_KEY','UNLABELED','COUNTS_LAYER','RANDOM_SEED',
+        'N_HVG','N_LATENT','TRAIN_BATCH_SIZE','TRAIN_DATASPLITTER_KWARGS',
+        'GENE_FALLBACK_TRIGGER','MIN_SHARED_GENES')}
+    return dict(query=identity(processing_paths(config['output'],sample)['RNA']),
+                reference=identity(config['refs']['lymphoid']),study=identity(STUDY),
+                code=digest([inspect.getsource(f) for f in functions]),constants=constants,
+                versions={key:importlib.metadata.version(key) for key in
+                          ('scvi-tools','torch','scanpy','anndata','numpy','pandas','scipy')})
+
+
+def validated_predictions(path, cell_ids):
+    predictions = pd.read_csv(path,sep='\t',index_col=0)
+    if (not predictions.index.is_unique or len(predictions)!=len(cell_ids)
+            or set(predictions.index)!=set(cell_ids)
+            or set(predictions.columns)!={'predicted_labels','label_confidence'}):
+        raise ValueError(f'{path}: prediction checkpoint cell IDs or columns differ')
+    labels = predictions.predicted_labels.astype('string').str.strip()
+    confidence = pd.to_numeric(predictions.label_confidence,errors='coerce')
+    if (labels.isna().any() or labels.eq('').any() or labels.str.casefold().eq('tumor').any()
+            or not np.isfinite(confidence).all() or not confidence.between(0,1).all()):
+        raise ValueError(f'{path}: invalid checkpoint labels or confidences')
+    return predictions.reindex(cell_ids)
+
+
 def donor_rna(query, reference, sample, folder, curation, config):
-    prediction = transfer(reference,query,folder)
+    path = folder/'lymphoid_predictions.tsv.gz'
+    checkpoint = folder/'lymphoid_predictions.checkpoint.json'
+    stamp = prediction_stamp(config,sample)
+    if checkpoint.exists():
+        saved = read_json(checkpoint)
+        if saved['stamp']!=stamp or saved['predictions']!=identity(path):
+            raise ValueError(f'{checkpoint}: prediction inputs, model settings or file changed')
+        prediction = validated_predictions(path,query.obs_names)
+        log(f"{sample['name']}: reusing verified lymphoid prediction checkpoint")
+    else:
+        prediction = transfer(reference,query,folder)
+        prediction = validated_predictions(path,query.obs_names)
+        write_json(checkpoint,dict(stamp=stamp,predictions=identity(path)))
     query.obs['lymphoid_atlas_predicted_labels'] = prediction.predicted_labels.reindex(query.obs_names)
     query.obs['lymphoid_atlas_label_confidence'] = prediction.label_confidence.reindex(query.obs_names)
     merged = {label:label_type for label_type,labels in MERGE_RULES.items() for label in labels}
