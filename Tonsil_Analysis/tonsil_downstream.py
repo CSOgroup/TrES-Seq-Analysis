@@ -803,17 +803,111 @@ def gene_views(gene,context,values,caps,folder,title,args):
     save_pairwise_pdf(fig,folder/'shared_umap',args)
 
 
-def compare(config, scope, first, second, cli, annotation):
-    results = config['output']
-    final, publication = results/'final', results/'publication'
-    args = SimpleNamespace(scope=scope,target_label=first,reference_label=second,
+SUMMARY_COLUMNS = ('gene','modality','rna_label','reference_cells','measured_cells',
+    'unavailable_cells','fraction_detected','mean_cp10k','median_cp10k',
+    'mean_log1p_cp10k','labels_from','unit','values_capped')
+
+
+def group_signal_summary(gene, mapped, reference_obs, args):
+    """Legacy descriptive statistics: exclude unavailable values, retain true zeros."""
+    rows = []
+    for modality, values in mapped.items():
+        values = np.asarray(values, dtype=float)
+        if values.shape != (len(reference_obs),):
+            raise ValueError(f'{modality}: signal/reference cell order differs')
+        for label in (args.target_label,args.reference_label):
+            group = reference_obs[LABEL].eq(label).to_numpy()
+            measured = values[group]
+            measured = measured[np.isfinite(measured)]
+            rows.append(dict(gene=gene,modality=modality,rna_label=label,
+                reference_cells=int(group.sum()),measured_cells=len(measured),
+                unavailable_cells=int(group.sum())-len(measured),
+                fraction_detected=float(np.mean(measured>0)) if len(measured) else np.nan,
+                mean_cp10k=float(np.mean(measured)) if len(measured) else np.nan,
+                median_cp10k=float(np.median(measured)) if len(measured) else np.nan,
+                mean_log1p_cp10k=float(np.mean(np.log1p(measured))) if len(measured) else np.nan,
+                labels_from='RNA lymphoid_final; exact physical cell matches',
+                unit='CP10K',values_capped=False))
+    return pd.DataFrame(rows,columns=SUMMARY_COLUMNS)
+
+
+def pair_arguments(scope, first, second, cli):
+    return SimpleNamespace(scope=scope,target_label=first,reference_label=second,
         min_cells_group=50,min_cells_condition=25,random_replicates=3,min_donors=3,seed=0,
         n_dimensions=30,neighbors=15,min_dist=.3,dna_metric='cosine',dna_color_transform='log1p',
         point_size=0,annotate=0,fdr=.001,min_lfc=.5,min_detection=.02,top_genes=30,
         extra_genes=cli.extra_genes)
+
+
+def pair_methods(scope, cli):
+    return list(dict.fromkeys(cli.merged_methods)) if scope=='merged' else ['random_subsets']
+
+
+def pair_signals(sources, features, args, annotation, rna=None):
+    if rna is None:
+        raw, var = count_matrix(sources['RNA'])
+        rna = rna_symbols(raw,var,args.scope)
+    x, genes, totals = rna
+    signals = {'RNA':signals_for(x,genes,features,sources['RNA']['obs'],totals)}
+    for modality, s in sources.items():
+        if modality=='RNA':
+            continue
+        matrix, symbols = gene_activity(s,annotation)
+        # signals_for computes the denominator over ALL gene activities first.
+        signals[modality] = signals_for(matrix,symbols,features,s['obs'])
+    return signals
+
+
+def write_pair_summary(features, signals, reference_obs, args, out):
+    positions = {m:s['obs'].index.get_indexer(reference_obs.index) for m,s in signals.items()}
+    tables = []
+    for gene in sorted(features):
+        mapped = {}
+        for modality, s in signals.items():
+            native = get_gene(s,gene,s['obs'].index)
+            rows = positions[modality]
+            values = np.full(len(reference_obs),np.nan)
+            available = rows>=0
+            values[available] = native[rows[available]]
+            mapped[modality] = values
+        tables.append(group_signal_summary(gene,mapped,reference_obs,args))
+    table = pd.concat(tables,ignore_index=True) if tables else pd.DataFrame(columns=SUMMARY_COLUMNS)
+    write_table(table,out/'gene_group_summaries.tsv')
+    return table
+
+
+def saved_pair_features(out, args, methods):
+    features = set(args.extra_genes)
+    numeric = ('logFC','FDR','pct_detected_target','pct_detected_rest')
+    for method in methods:
+        path = out/('donor_grouped' if method=='donor_replicates' else 'pseudo_grouped')/'DGE_results.tsv'
+        require_files(path)
+        table = pd.read_csv(path,sep='\t',dtype={'gene':str},keep_default_na=False,
+                            na_values={key:['NA',''] for key in numeric})
+        if not table.gene.is_unique:
+            raise ValueError(f'{path}: duplicate genes')
+        for key in numeric:
+            table[key] = pd.to_numeric(table[key],errors='raise')
+        for key, expected in (('target_label',args.target_label),('reference_label',args.reference_label)):
+            if key in table and not table[key].eq(expected).all():
+                raise ValueError(f'{path}: unexpected {key}')
+        features.update(select_pair_markers(table,args).gene)
+    expected = {slug(gene) for gene in features}
+    plotted = {p.parent.name for p in (out/'genes').glob('*/shared_umap.pdf')}
+    if expected!=plotted:
+        raise ValueError(f'{out}: saved marker/extra-gene union differs from Shared UMAPs; '
+                         f'unplotted={sorted(expected-plotted)}, unexplained_plots={sorted(plotted-expected)}. '
+                         'Check --merged-methods and supply the original --extra-genes before writing summaries.')
+    return features
+
+
+def compare(config, scope, first, second, cli, annotation):
+    results = config['output']
+    final, publication = results/'final', results/'publication'
+    args = pair_arguments(scope,first,second,cli)
     modalities = (*MARKS,'H3K9me3') if scope=='merged' else MARKS
     sources = pair_sources({m:source(final,publication,scope,m) for m in ('RNA',*modalities)},args)
-    methods = list(dict.fromkeys(cli.merged_methods)) if scope=='merged' else ['random_subsets']
+    methods = pair_methods(scope,cli)
     obs = sources['RNA']['obs']
     if 'donor_replicates' in methods:
         coverage = obs.groupby(['sample',LABEL]).size().unstack(fill_value=0)
@@ -851,18 +945,18 @@ def compare(config, scope, first, second, cli, annotation):
             features.update(markers.gene)
 
         if features:
-            signals = {'RNA':signals_for(x,genes,features,obs,totals)}
-            for modality in modalities:
-                matrix, symbols = gene_activity(sources[modality],annotation)
-                signals[modality] = signals_for(matrix,symbols,features,sources[modality]['obs'])
+            signals = pair_signals(sources,features,args,annotation,(x,genes,totals))
+            write_pair_summary(features,signals,obs,args,out)
             for gene in sorted(features):
                 values = {m:get_gene(s,gene,s['obs'].index) for m,s in signals.items()}
                 caps = {m:{gene:color_cap(v,99.)} for m,v in values.items()}
                 gene_views(gene,context,values,caps,out/'genes'/slug(gene),comparison_title(args),args)
+        else:
+            write_pair_summary(features,{},obs,args,out)
     log(f'Pairwise: {out}')
 
 
-def pairwise_stage(config, cli):
+def pair_requests(config, cli):
     both = cli.label_a is not None and cli.label_b is not None
     if ((cli.label_a is not None or cli.label_b is not None) and not both) or (both and cli.label_a==cli.label_b):
         raise ValueError('Supply two different labels or omit both to run the study pairs')
@@ -870,14 +964,41 @@ def pairwise_stage(config, cli):
         raise ValueError('Choose explicit labels for Tonsil1_gt600')
     scopes = [cli.dataset] if cli.dataset else config['pairwise']['datasets']
     pairs = [(cli.label_a,cli.label_b)] if both else config['pairwise']['pairs']
+    return [(scope,first,second) for scope in scopes for first,second in pairs]
+
+
+def pairwise_stage(config, cli):
+    requests = pair_requests(config,cli)
 
     thread_budget(config['threads'])
     check_r()
     plotting_style()
     annotation = gene_annotation()
-    for scope in scopes:
-        for first,second in pairs:
-            compare(config,scope,first,second,cli,annotation)
+    for scope,first,second in requests:
+        compare(config,scope,first,second,cli,annotation)
+
+
+def pairwise_summary_stage(config, cli):
+    """Read finalized profiles and saved fits; never fit models or build embeddings."""
+    plans = []
+    for scope,first,second in pair_requests(config,cli):
+        args = pair_arguments(scope,first,second,cli)
+        out = config['output']/'pairwise'/scope/comparison_key(first,second)
+        plans.append((args,out,saved_pair_features(out,args,pair_methods(scope,cli))))
+    # Validate every requested gene set before starting expensive signal counting.
+    thread_budget(config['threads'])
+    annotation = gene_annotation()
+    final, publication = config['output']/'final', config['output']/'publication'
+    for args,out,features in plans:
+        modalities = ('RNA',*MARKS,'H3K9me3') if args.scope=='merged' else ('RNA',*MARKS)
+        with output_lock(config['output']/'.work'/'pairwise'/args.scope/out.name):
+            # Check again under the comparison lock in case a producer changed fits.
+            if features!=saved_pair_features(out,args,pair_methods(args.scope,cli)):
+                raise ValueError(f'{out}: marker set changed during summary preparation')
+            sources = pair_sources({m:source(final,publication,args.scope,m) for m in modalities},args)
+            signals = pair_signals(sources,features,args,annotation) if features else {}
+            table = write_pair_summary(features,signals,sources['RNA']['obs'],args,out)
+        log(f'Pairwise summary: {out / "gene_group_summaries.tsv"} ({len(features)} genes, {len(table)} rows)')
 
 
 # Stage 04: germinal center zone contrasts and effect sizes
@@ -2049,13 +2170,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command')
     commands.add_parser('all', help='run the study pairwise and DZ–LZ analyses')
-    pair = commands.add_parser('pairwise',help='RNA differential expression and shared gene-signal UMAPs')
-    pair.add_argument('--dataset',type=normalize_dataset)
-    pair.add_argument('--label-a')
-    pair.add_argument('--label-b')
-    pair.add_argument('--extra-genes',nargs='*',default=[])
     modes = ('donor_replicates','random_subsets')
-    pair.add_argument('--merged-methods',nargs='+',choices=modes,default=list(modes))
+    for command,help_text in (
+        ('pairwise','RNA differential expression, shared gene-signal UMAPs and gene-group summaries'),
+        ('pairwise-summary','Only gene-group summaries from saved DGE tables and finalized profiles')):
+        pair = commands.add_parser(command,help=help_text)
+        pair.add_argument('--dataset',type=normalize_dataset)
+        pair.add_argument('--label-a')
+        pair.add_argument('--label-b')
+        pair.add_argument('--extra-genes',nargs='*',default=[])
+        pair.add_argument('--merged-methods',nargs='+',choices=modes,default=list(modes))
     zone = commands.add_parser('dz-lz',help='zone differential analyses and effect-size plots')
     zone.add_argument('--scopes',nargs='+',type=normalize_dataset,default=list(SCOPES))
     zone.add_argument('--merged-methods',nargs='+',choices=modes,default=list(modes))
@@ -2064,6 +2188,8 @@ def main(argv=None):
     config = load_study()
     if args.command == 'pairwise':
         pairwise_stage(config, args)
+    elif args.command == 'pairwise-summary':
+        pairwise_summary_stage(config, args)
     elif args.command == 'dz-lz':
         dz_lz_stage(config, args)
     else:
