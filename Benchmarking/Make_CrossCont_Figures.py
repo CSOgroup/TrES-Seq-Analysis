@@ -123,13 +123,14 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 for _key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
     os.environ[_key] = '1'
 import numpy as np
-import pyBigWig
-import pysam
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from GEO_Preparation.merge_libraries import fragment_path
 
 MARKS = ('H3K27ac', 'H3K27me3')
 # Aggregate published tracks retain the approved signal-threshold exception.
@@ -142,6 +143,10 @@ DATASETS = {
     'NanoCNT_inhouse': ('hg38', 'fragments', {m: f'InHouse_NanoCNT_{m}' for m in MARKS}),
     'NanoCNT_published': ('mm10', 'fragments', dict(zip(MARKS, ('public_NanoCNT_ac', 'public_NanoCNT_me3')))),
     'TrES': ('hg38', 'bam', {m: f'TrES_{m}' for m in MARKS}),
+}
+GEO_DATASETS = {
+    'MTRseq': 'MTRseq', 'uCoTargetX_overnight': 'uCoTargetX_OverNight',
+    'NanoCNT_inhouse': 'InHouse_NanoCNT', 'TrES': 'TrES',
 }
 FLANK, BIN_SIZE, QVALUE = 5000, 100, 1e-4
 LABELS = {
@@ -198,13 +203,14 @@ def assemble_mtr(mark, work, day0):
     return target
 
 
-def input_path(key):
-    return INPUTS[key].expanduser().resolve()
+def input_path(key, replacements=None):
+    path = INPUTS[key] if replacements is None else replacements.get(key, INPUTS[key])
+    return path.expanduser().resolve()
 
 
-def source_path(dataset, mark, work):
+def source_path(dataset, mark, work, replacements=None):
     if dataset == 'MTR_published': return assemble_mtr(mark, work, mtr_day0_ids())
-    return input_path(DATASETS[dataset][2][mark])
+    return input_path(DATASETS[dataset][2][mark], replacements)
 
 
 def textopen(path):
@@ -294,6 +300,8 @@ def mtr_day0_ids():
 
 
 def bam_rows(path, sizes):
+    import pysam
+
     # Source BAMs are already filtered/deduplicated. One read1 represents one fragment.
     with pysam.AlignmentFile(str(path), 'rb') as bam, pysam.AlignmentFile(str(path), 'rb') as mates:
         lengths = {'chr' + c.removeprefix('chr'): n for c, n in zip(bam.references, bam.lengths)}
@@ -339,9 +347,11 @@ def fragment_rows(path, sizes):
             yield c, a, b, cell
 
 
-def prepare_fragments(dataset, mark, directory):
-    genome, kind, _ = DATASETS[dataset]; sizes, blocks = references(genome)
-    records = bam_rows(source_path(dataset, mark, directory.parent), sizes) if kind == 'bam' else fragment_rows(source_path(dataset, mark, directory.parent), sizes)
+def prepare_fragments(dataset, mark, directory, replacements=None):
+    genome = DATASETS[dataset][0]
+    sizes, blocks = references(genome)
+    source = source_path(dataset, mark, directory.parent, replacements)
+    records = bam_rows(source, sizes) if source.suffix == '.bam' else fragment_rows(source, sizes)
     counts = Counter(); raw = directory / 'canonical.tsv'; selected = directory / 'selected.bedpe'
     with open(raw, 'w') as out:
         for c, a, b, cell in records:
@@ -372,6 +382,8 @@ def prepare_fragments(dataset, mark, directory):
 
 
 def prepare_bigwig(dataset, mark, directory):
+    import pyBigWig
+
     sizes, _ = references('hg19'); signal = source_path(dataset, mark, directory.parent)
     with pyBigWig.open(str(signal)) as bw:
         lengths = bw.chroms()
@@ -466,20 +478,19 @@ def compute(dataset, mark, calls, signals, directory, threads):
     return bed, matrix, len(rows)
 
 
-def check_inputs(datasets=DATASETS):
+def check_inputs(datasets=DATASETS, replacements=None):
     if set(INPUTS) != set(SOURCES): raise ValueError('INPUTS and SOURCES keys differ')
     required = set()
     for dataset in datasets:
-        genome, kind, marks = DATASETS[dataset]
+        genome, _, marks = DATASETS[dataset]
         required.update((f'{genome}_sizes', f'{genome}_blacklist'))
         required.update(marks.values())
-        if kind == 'bam':
-            required.update(f'{key}_index' for key in marks.values())
+        required.update(f'{key}_index' for key in marks.values() if input_path(key, replacements).suffix == '.bam')
         if dataset in ('TrES', 'NanoCNT_inhouse'):
             required.update(('hg19_sizes', 'hg19_blacklist', 'hg38_to_hg19'))
         if dataset == 'MTR_published':
             required.update(key for key in INPUTS if key.startswith(('MTR_S', 'RT_S')))
-    paths = [input_path(k) for k in INPUTS if k in required]
+    paths = [input_path(k, replacements) for k in INPUTS if k in required]
     missing = [str(p) for p in paths if not p.is_file()]
     if missing: raise FileNotFoundError('Missing required input files:\n' + '\n'.join(missing))
     if len(set(paths)) != len(paths): raise ValueError('INPUTS must list each file only once')
@@ -489,11 +500,19 @@ def check_inputs(datasets=DATASETS):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--datasets', nargs='+', choices=DATASETS, default=list(DATASETS))
+    parser.add_argument('--dataset-root', type=Path,
+                        help='Root of the merged in-house dataset folders')
     parser.add_argument('--check-inputs', action='store_true', help='Check required paths and stop')
     parser.add_argument('--threads', type=int, default=8)
     args = parser.parse_args()
     if args.threads < 1: parser.error('--threads must be positive')
-    paths = check_inputs(args.datasets)
+    replacements = {}
+    if args.dataset_root is not None:
+        root = args.dataset_root.expanduser().resolve()
+        for dataset, name in GEO_DATASETS.items():
+            for mark, key in DATASETS[dataset][2].items():
+                replacements[key] = fragment_path(root, name, mark)
+    paths = check_inputs(args.datasets, replacements)
     if args.check_inputs:
         print(f'All {len(paths)} required files exist.'); return
     if OUTPUT_ROOT.exists(): raise FileExistsError(f'Refusing to overwrite output root: {OUTPUT_ROOT}')
@@ -506,8 +525,10 @@ def main():
         jobs = {}
         for mark in MARKS:
             directory = scratch / f'{dataset}_{mark}'; directory.mkdir()
-            prepare = prepare_bigwig if DATASETS[dataset][1] == 'bigwig' else prepare_fragments
-            jobs[mark] = prepare(dataset, mark, directory)
+            if DATASETS[dataset][1] == 'bigwig':
+                jobs[mark] = prepare_bigwig(dataset, mark, directory)
+            else:
+                jobs[mark] = prepare_fragments(dataset, mark, directory, replacements)
         for mark in MARKS:
             directory = scratch / f'{dataset}_{mark}'
             bed, matrix, count = compute(dataset, mark, jobs[mark][0], [jobs[m][1] for m in MARKS], directory, args.threads)
