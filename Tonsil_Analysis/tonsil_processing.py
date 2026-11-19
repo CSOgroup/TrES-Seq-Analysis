@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 from types import SimpleNamespace
 from urllib.error import URLError
@@ -37,6 +38,10 @@ from scipy.stats import gaussian_kde
 # Study inputs and shared utilities
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent))
+from GEO_Preparation.merge_libraries import fragment_path as dataset_fragment_path, library_pattern
+from GEO_Preparation.merge_libraries import rna_paths as dataset_rna_paths, split_cell_id
+
 STUDY = ROOT / 'study.json'
 CURATION = ROOT / 'cell_curation.tsv.gz'
 MODALITIES = ('RNA', 'H3K27ac', 'H3K27me3', 'H3K9me3')
@@ -267,10 +272,16 @@ def load_study():
     config = read_json(STUDY)
     config['tresflow'] = (ROOT / config['tresflow_root']).resolve()
     config['output'] = (ROOT / config['output_root']).resolve()
+    dataset_root = config.get('dataset_root')
+    config['datasets'] = (
+        (ROOT / Path(dataset_root).expanduser()).resolve() if dataset_root else None
+    )
     ref_dir = (ROOT / config['reference_dir']).resolve()
     config['refs'] = {k:(ref_dir / spec['file']).resolve()
                       for k,spec in config['references'].items()}
     sample_dirs = [config['tresflow'] / name for name in PROTOCOLS]
+    if config['datasets'] is not None:
+        sample_dirs.append(config['datasets'])
     check_layout(config['output'],ref_dir,*sample_dirs,*config['refs'].values())
     if len(config['samples']) != len(PROTOCOLS) or {
         s['name']:s['tagmentation_protocol'] for s in config['samples']
@@ -331,7 +342,9 @@ def rna_paths(config, sample, library):
     return tuple(folder / name for name in ('matrix.mtx.gz','barcodes.tsv.gz','features.tsv.gz'))
 
 
-def bam_path(config, sample, library, mark):
+def histone_path(config, sample, library, mark):
+    if library is None:
+        return dataset_fragment_path(config['datasets'],sample,mark)
     suffix = config['dna_processing'].get('bam_suffix', 'NoDup')
     if suffix not in ('NoDup', 'MarkedDup'):
         raise ValueError("dna_processing.bam_suffix must be 'NoDup' or 'MarkedDup'")
@@ -474,7 +487,17 @@ def sample_metadata(obs, sample):
     return obs
 
 
-def read_rna(config, sample, sc, ad):
+def merged_cell_metadata(ids, libraries):
+    pattern = library_pattern(libraries)
+    index = pd.Index(ids.astype(str),name='cell_id')
+    obs = pd.DataFrame([split_cell_id(cell,pattern) for cell in index],
+                       index=index,columns=['library','barcode'])
+    if not index.is_unique or not obs['barcode'].str.fullmatch(r'\d{2}_[ACGT]{24}').all():
+        raise ValueError('Expected unique library-prefixed SB_24nt cell IDs')
+    return obs
+
+
+def read_library_rna(config, sample, sc, ad):
     parts = []
     for library in sample['libraries']:
         directory = rna_paths(config,sample['name'],library)[0].parent
@@ -487,7 +510,18 @@ def read_rna(config, sample, sc, ad):
         part.obs['library'] = library
         part.obs_names = pd.Index(library+'_'+barcodes,name='cell_id')
         parts.append(part)
-    rna = ad.concat(parts,join='inner',merge='same',index_unique=None)
+    return ad.concat(parts,join='inner',merge='same',index_unique=None)
+
+
+def read_rna(config, sample, sc, ad):
+    if config['datasets'] is None:
+        rna = read_library_rna(config,sample,sc,ad)
+    else:
+        name = sample['name']
+        directory = dataset_rna_paths(config['datasets'],name)[0].parent
+        log(f'{name}/RNA: {directory}')
+        rna = sc.read_10x_mtx(directory,var_names='gene_symbols',make_unique=True,prefix=f'{name}_RNA_')
+        rna.obs = merged_cell_metadata(rna.obs_names,sample['libraries'])
     integer_counts(rna.X)
     genes = rna.var_names.str.upper()
     rna.var['mt'] = genes.str.startswith('MT-')
@@ -554,25 +588,36 @@ def process_rna(config, sample, curation, path, sc, ad):
     log(f'{sample["name"]}/RNA: {keep.sum():,} retained of {rna.n_obs:,} candidates')
 
 
-def import_library(config, sample, library, mark, work, sizes, snap):
-    fragments = work/f'{library}_{mark}.fragments.tsv.gz'
-    bam = bam_path(config,sample['name'],library,mark)
-    log(f'{sample["name"]}/{mark}: reading {bam.name}')
-    snap.pp.make_fragment_file(str(bam),str(fragments),barcode_tag='CB',
-                              shift_left=0,shift_right=0,min_mapq=30,tempdir=str(work))
+def import_histone(config, sample, library, mark, work, sizes, snap):
+    source = histone_path(config,sample['name'],library,mark)
+    log(f'{sample["name"]}/{mark}: reading {source.name}')
+    from_bam = library is not None
+    fragments = source
+    if from_bam:
+        fragments = work/f'{library}_{mark}.fragments.tsv.gz'
+        snap.pp.make_fragment_file(str(source),str(fragments),barcode_tag='CB',
+                                  shift_left=0,shift_right=0,min_mapq=30,tempdir=str(work))
     require_files(fragments)
-    data = snap.pp.import_fragments(str(fragments),sizes,file=str(work/f'{library}_{mark}.h5ad'),
-                                    min_num_fragments=100,sorted_by_barcode=True,tempdir=str(work))
+    name = library if from_bam else sample['name']
+    data = snap.pp.import_fragments(str(fragments),sizes,file=str(work/f'{name}_{mark}.h5ad'),
+                                    min_num_fragments=100,sorted_by_barcode=from_bam,tempdir=str(work))
     try:
         obs = snap_obs(data)
         raw = obs['barcode'] if 'barcode' in obs else obs.index
-        barcode = pd.Index(raw.astype(str)).str.removeprefix(library+'_')
-        if barcode.has_duplicates or not barcode.str.fullmatch(r'\d{2}_[ACGT]{24}').all():
-            raise ValueError(f'{bam}: expected unique SB_24nt fragment barcodes')
-        obs['barcode'] = barcode.to_numpy()
-        obs['library'] = library
+        if from_bam:
+            barcode = pd.Index(raw.astype(str)).str.removeprefix(library+'_')
+            if barcode.has_duplicates or not barcode.str.fullmatch(r'\d{2}_[ACGT]{24}').all():
+                raise ValueError(f'{source}: expected unique SB_24nt fragment barcodes')
+            obs['barcode'] = barcode.to_numpy()
+            obs['library'] = library
+            obs.index = pd.Index(library+'_'+barcode,name='cell_id')
+        else:
+            libraries = [lib for lib,marks in sample['libraries'].items() if mark in marks]
+            cells = merged_cell_metadata(pd.Index(raw),libraries)
+            obs['barcode'] = cells['barcode'].to_numpy()
+            obs['library'] = cells['library'].to_numpy()
+            obs.index = cells.index
         obs['mark'] = mark
-        obs.index = pd.Index(library+'_'+barcode,name='cell_id')
         set_snap_obs(data,sample_metadata(obs,sample))
         return data
     except Exception:
@@ -586,9 +631,10 @@ def process_dna(config, sample, mark, curation, path, sizes, snap):
         work = Path(tmp)
         parts = []
         try:
-            for library,marks in sample['libraries'].items():
-                if mark in marks:
-                    parts.append(import_library(config,sample,library,mark,work,sizes,snap))
+            libraries = ([lib for lib,marks in sample['libraries'].items() if mark in marks]
+                         if config['datasets'] is None else [None])
+            for library in libraries:
+                parts.append(import_histone(config,sample,library,mark,work,sizes,snap))
             destination = str(work/'all_cells.h5ad')
             data = parts[0].copy(destination) if len(parts)==1 else snap.concat(parts,file=destination,backend='hdf5')
         finally:
@@ -625,9 +671,14 @@ def processing_samples(config, sample=None):
     chosen = [s for s in config['samples'] if sample in (None,s['name'])]
     inputs = [CURATION]
     for donor in chosen:
+        if config['datasets'] is not None:
+            inputs.extend(dataset_rna_paths(config['datasets'],donor['name']))
+            marks = sorted({m for marks in donor['libraries'].values() for m in marks})
+            inputs.extend(histone_path(config,donor['name'],None,m) for m in marks)
+            continue
         for library,marks in donor['libraries'].items():
             inputs.extend(rna_paths(config,donor['name'],library))
-            inputs.extend(bam_path(config,donor['name'],library,m) for m in marks)
+            inputs.extend(histone_path(config,donor['name'],library,m) for m in marks)
     require_files(*inputs)
     return chosen
 

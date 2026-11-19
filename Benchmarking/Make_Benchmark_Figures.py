@@ -239,6 +239,7 @@ THREADS = 16
 import argparse
 import bisect
 from collections import Counter
+from contextlib import ExitStack
 from itertools import groupby, product
 import gzip
 import json
@@ -261,11 +262,15 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Patch
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from GEO_Preparation.merge_libraries import fragment_path, library_pattern, rna_paths, split_cell_id
 
 LOG = logging.getLogger("benchmark_figures")
 MARKS = ("H3K27ac", "H3K27me3")
 MODS = (*MARKS, "RNA")
 K422_K9_DT_MARKS = ("H3K27me3", "H3K9me3")
+K422_K9_DATASET = "TrES_K422_K9_DT"
+K422_K9_LIBRARIES = {"K9A_A": "A", "K9B_B": "B", "K9C_C": "C"}
 AUTOSOMES = {f"chr{i}" for i in range(1, 23)}
 NUCLEAR = AUTOSOMES | {"chrX", "chrY"}
 MM = 1 / 25.4
@@ -1129,13 +1134,30 @@ def assemble_mtr(mark, work, day0):
     return target
 
 
-def input_path(key):
-    return INPUTS[key].expanduser().resolve()
+def input_path(key, replacements=None):
+    path = INPUTS[key] if replacements is None else replacements.get(key, INPUTS[key])
+    return path.expanduser().resolve()
 
 
-def mex(keys, unique_names=True):
+def dataset_inputs(root):
+    replacements = {}
+    if root is not None:
+        for dataset, source in INHOUSE.items():
+            for mark, key in source["dna"].items():
+                replacements[key] = fragment_path(root, dataset, mark)
+            if "rna" in source:
+                matrix, features, barcodes = rna_paths(root, dataset)
+                replacements.update(zip(source["rna"], (matrix, barcodes, features)))
+    return replacements
+
+
+def mex(keys, unique_names=True, replacements=None):
+    return read_mex((input_path(key, replacements) for key in keys), unique_names)
+
+
+def read_mex(paths, unique_names=True):
     import anndata as ad
-    matrix, barcodes, features = map(input_path, keys)
+    matrix, barcodes, features = paths
     with open_text(matrix) as handle:
         x = sparse.csr_matrix(mmread(handle)).T.tocsr()
     with open_text(barcodes) as handle:
@@ -1188,14 +1210,17 @@ def normalized_ids(values):
     return result
 
 
-def bam_fragments(key, rna_ids, work, memo):
+def histone_fragments(key, rna_ids, work, memo, replacements=None):
+    source = input_path(key, replacements)
+    if source.suffix != ".bam":
+        return source
     if key in memo:
         return memo[key]
     import snapatac2 as snap
     folder = work / key; folder.mkdir()
     path = folder / "fragments.bed.gz"
-    tag, _ = detect_bam_tag(input_path(key), rna_ids)
-    snap.pp.make_fragment_file(str(input_path(key)), str(path), barcode_tag=tag,
+    tag, _ = detect_bam_tag(source, rna_ids)
+    snap.pp.make_fragment_file(str(source), str(path), barcode_tag=tag,
                               shift_left=0, shift_right=0, min_mapq=20,
                               chunk_size=5000000, tempdir=str(folder))
     memo[key] = path
@@ -1261,15 +1286,16 @@ def score_fragments(path, frame, peak, library=None):
     return frame, lengths
 
 
-def compute_inhouse(work, memo):
+def compute_inhouse(work, memo, replacements=None):
     qc_frames=[]; selected=[]; histograms=[]
     for tech in TECHS:
         source = INHOUSE[tech]
         LOG.info("In-house | %s", tech)
-        rna = rna_frame(mex(source["rna"]), "inhouse") if "rna" in source else None
+        rna = rna_frame(mex(source["rna"], replacements=replacements), "inhouse") if "rna" in source else None
         dna={}; paths={}
         for mark,key in source["dna"].items():
-            path = bam_fragments(key,rna.barcode,work,memo) if "rna" in source else input_path(key)
+            path = (histone_fragments(key,rna.barcode,work,memo,replacements)
+                    if "rna" in source else input_path(key,replacements))
             paths[mark] = path
             counts=Counter(b for c,a,z,b in fragments(path) if c in NUCLEAR)
             dna[mark] = pd.DataFrame(sorted(counts.items()),columns=["source_barcode","unique_fragments"])
@@ -1382,7 +1408,7 @@ def public_sanitize(A,tech):
 
 
 # Native SnapATAC2 totals intentionally differ from the nuclear-row FRiP denominators above.
-def compute_public(work, memo, out):
+def compute_public(work, memo, out, replacements=None):
     import scanpy as sc
     import snapatac2 as snap
     mtr_rna, day0 = build_mtr_rna(out / "scRNA_D0.h5ad")
@@ -1395,7 +1421,7 @@ def compute_public(work, memo, out):
                 del mtr_rna
             else:
                 key = source["rna"]
-                A = mex(key) if isinstance(key, list) else sc.read_10x_h5(input_path(key))
+                A = mex(key, replacements=replacements) if isinstance(key, list) else sc.read_10x_h5(input_path(key))
             rna_ids=list(A.obs_names)
             if "feature_types" in A.var:
                 keep=A.var.feature_types.astype(str).str.contains(r"Gene Expression|RNA",case=False,regex=True)
@@ -1407,7 +1433,7 @@ def compute_public(work, memo, out):
             f["n_genes"]=f.genes
             qc.append(f.reset_index(drop=True))
         for mark,key in source.get("dna",{}).items():
-            path=(bam_fragments(key,rna_ids,work,memo) if tech=="TrES" else
+            path=(histone_fragments(key,rna_ids,work,memo,replacements) if tech=="TrES" else
                   assemble_mtr(mark,work,day0) if tech=="MTR" else input_path(key))
             genome=snap.genome.mm10 if tech=="NanoCNT" else snap.genome.hg38
             A=snap.pp.import_fragments(str(path),chrom_sizes=genome.chrom_sizes,min_num_fragments=0,
@@ -1440,16 +1466,62 @@ def compute_public(work, memo, out):
     return pd.concat(qc,ignore_index=True),pd.concat(frip,ignore_index=True)
 
 
-def k422_k9_dt_compute(work):
+def merged_showcase_inputs(root, work):
+    """Recover the original three library groups for QC and pooled peak calling."""
+    pattern = library_pattern(K422_K9_LIBRARIES)
+    matrix, features, barcodes = rna_paths(root, K422_K9_DATASET)
+    rna = read_mex((matrix, barcodes, features), unique_names=False)
+    cells = [split_cell_id(cell, pattern) for cell in rna.obs_names]
+    rna_by_library = {}
+    for name, lib in K422_K9_LIBRARIES.items():
+        positions = [i for i, (library, _) in enumerate(cells) if library == name]
+        if not positions:
+            raise ValueError(f"{K422_K9_DATASET}: no RNA cells from {name}")
+        part = rna[positions].copy()
+        part.obs_names = [cells[i][1] for i in positions]
+        rna_by_library[lib] = part
+
+    dna = {}
+    for mark in K422_K9_DT_MARKS:
+        source = fragment_path(root, K422_K9_DATASET, mark)
+        paths = {lib: work / f"k422_k9_dt_{lib}_{mark}.gz" for lib in K422_K9_DT}
+        originals = {lib: {} for lib in paths}
+        counts = {lib: Counter() for lib in paths}
+        with ExitStack() as stack:
+            targets = {lib: stack.enter_context(gzip.open(path, "wt", encoding="utf-8"))
+                       for lib, path in paths.items()}
+            for chrom, start, end, cell in fragments(source):
+                if chrom not in NUCLEAR:
+                    continue
+                library, original = split_cell_id(cell, pattern)
+                lib = K422_K9_LIBRARIES[library]
+                barcode = canonical_barcode(original)
+                if originals[lib].setdefault(barcode, original) != original:
+                    raise ValueError(f"{source}: barcode normalization collision in {library}: {barcode!r}")
+                targets[lib].write(f"{chrom}\t{start}\t{end}\t{barcode}\n")
+                counts[lib][barcode] += 1
+        for lib, path in paths.items():
+            frame = pd.Series(counts[lib], dtype=np.int64, name="unique_fragments")
+            dna[lib, mark] = path, frame.rename_axis("barcode").sort_index().to_frame()
+    return rna_by_library, dna
+
+
+def k422_k9_dt_compute(work, dataset_root=None):
+    if dataset_root is not None:
+        merged_rna, merged_dna = merged_showcase_inputs(dataset_root, work)
     qc=[];paths={};selected={}
     for lib,source in K422_K9_DT.items():
         LOG.info("Showcase | library %s",lib)
-        rna=rna_frame(mex(source["rna"],unique_names=False),"show")
+        library_rna = mex(source["rna"],unique_names=False) if dataset_root is None else merged_rna[lib]
+        rna=rna_frame(library_rna,"show")
         rna["barcode"]=canonicalize_barcodes(rna.source_barcode)
         rna["library"]=lib;rna["modality"]="RNA";qc.append(rna[rna.pass_qc].copy())
         for mark,key in source["dna"].items():
-            path=work/f"k422_k9_dt_{lib}_{mark}.gz"
-            f,_=extract_fragments(input_path(key),path,list(rna.barcode),threads=THREADS,tmpdir=work)
+            if dataset_root is None:
+                path=work/f"k422_k9_dt_{lib}_{mark}.gz"
+                f, _ = extract_fragments(input_path(key),path,list(rna.barcode),threads=THREADS,tmpdir=work)
+            else:
+                path, f = merged_dna[lib,mark]
             f=f.reset_index();f["source_barcode"]=f.barcode;f["library"]=lib;f["modality"]=mark
             f=f[f.unique_fragments.between(300,15000)].copy()
             f["cell_id"]=lib+"::"+f.barcode
@@ -1580,9 +1652,23 @@ def public_input_keys():
     return keys
 
 
-def check_inputs(required=None):
+def check_inputs(required=None, dataset_root=None, replacements=None):
     if set(INPUTS) != set(SOURCES): raise ValueError("INPUTS and SOURCES keys differ")
-    paths=[input_path(k) for k in INPUTS if required is None or k in required]
+    keys = set(INPUTS) if required is None else set(required)
+    paths = []
+    if dataset_root is not None:
+        showcase_keys = {key for key in keys if key.startswith("K422_K9_DT_")}
+        if showcase_keys:
+            keys -= showcase_keys
+            paths.extend(rna_paths(dataset_root, K422_K9_DATASET))
+            paths.extend(fragment_path(dataset_root, K422_K9_DATASET, mark) for mark in K422_K9_DT_MARKS)
+    for key in INPUTS:
+        if key not in keys:
+            continue
+        if key.endswith("_index") and input_path(key.removesuffix("_index"), replacements).suffix != ".bam":
+            continue
+        paths.append(input_path(key, replacements))
+    paths = [p.resolve() for p in paths]
     missing=[str(p) for p in paths if not p.is_file()]
     if missing:
         raise FileNotFoundError("Missing required input files:\n"+"\n".join(missing))
@@ -1602,6 +1688,8 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--public-only",action="store_true",help="Run the public benchmark panels only")
     mode.add_argument("--mtr-rna-only",action="store_true",help="Build scRNA_D0.h5ad from the GEO RNA triplets only")
+    parser.add_argument("--dataset-root", type=Path,
+                        help="Root of the merged in-house RNA and histone dataset folders")
     parser.add_argument("--check-inputs",action="store_true",help="Check required paths and stop")
     args=parser.parse_args()
     logging.basicConfig(level=logging.INFO,format="%(message)s")
@@ -1610,11 +1698,15 @@ def main():
         required = MTR_RNA_INPUTS
     elif args.public_only:
         required = public_input_keys()
-    paths=check_inputs(required)
+    dataset_root = args.dataset_root.expanduser().resolve() if args.dataset_root is not None else None
+    replacements = dataset_inputs(dataset_root)
+    paths=check_inputs(required, dataset_root, replacements)
     if args.check_inputs:
         print(f"All {len(paths)} required files exist.");return
     if not args.mtr_rna_only:
-        executables = ("macs3", "sort", "awk") if args.public_only else ("macs3", "samtools", "sort", "awk")
+        executables = ["macs3", "sort", "awk"]
+        if not args.public_only and dataset_root is None:
+            executables.append("samtools")
         missing=[x for x in executables if not shutil.which(x)]
         if missing: raise RuntimeError("Required executables absent from PATH: "+", ".join(missing))
     out=OUTPUT_ROOT.expanduser().resolve()
@@ -1628,10 +1720,10 @@ def main():
     SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="benchmark-figures-", dir=SCRATCH_ROOT) as temp:
         work=Path(temp);memo={}
-        qc,frip=compute_public(work,memo,out);plot_public(qc,frip,out)
+        qc,frip=compute_public(work,memo,out,replacements);plot_public(qc,frip,out)
         if not args.public_only:
-            metrics,hist=k422_k9_dt_compute(work);k422_k9_dt_plot(metrics,hist,out)
-            qc,metrics,hist=compute_inhouse(work,memo);plot_inhouse(qc,metrics,hist,out)
+            metrics,hist=k422_k9_dt_compute(work,dataset_root);k422_k9_dt_plot(metrics,hist,out)
+            qc,metrics,hist=compute_inhouse(work,memo,replacements);plot_inhouse(qc,metrics,hist,out)
     expected = EXPECTED_PDFS
     if args.public_only:
         expected = {p for p in expected if p.split("/", 1)[0] in (GROUP_PUBLIC, GROUP_FRIP)}
