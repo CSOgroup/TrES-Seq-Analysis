@@ -135,7 +135,11 @@ def read_rna_matrix(source):
 
 
 def import_rna(sample):
-    adata = read_rna_matrix(RNA_DIR / f"{sample}.Solo.outGeneFull/filtered")
+    prefix = f"CellLineMix_{sample}_RNA_"
+    if all((RNA_DIR / f"{prefix}{name}.gz").is_file() for name in MEX_FILES):
+        adata = sc.read_10x_mtx(RNA_DIR, prefix=prefix)
+    else:
+        adata = read_rna_matrix(RNA_DIR / f"{sample}.Solo.outGeneFull/filtered")
     adata.var["mt"] = adata.var_names.str.startswith("Mt-")
     adata.var["ribo"] = adata.var_names.str.startswith(("Rps", "Rpl"))
     adata.var["hb"] = adata.var_names.str.contains("^Hb[ab]")

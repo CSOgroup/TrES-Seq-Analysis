@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parent
@@ -22,6 +23,12 @@ MERGED_H5AD = {
     "H3K27ac": PREPROCESSED_OBJECTS / "H3K27ac_merged.h5ad",
     "H3K27me3": PREPROCESSED_OBJECTS / "H3K27me3_merged.h5ad",
 }
+merged_dir = os.environ.get("TRES_TONSIL_MERGED_DIR")
+if merged_dir:
+    MERGED_H5AD = {
+        assay: Path(merged_dir).expanduser() / f"Tonsils1to4_{assay}_merged.h5ad"
+        for assay in MERGED_H5AD
+    }
 
 
 def tonsil1_rna_h5ad() -> Path:

@@ -12,6 +12,8 @@ micromamba create -f environment.yml
 
 Set **`tresflow_root`** in `study.json` to the folder containing `Tonsil1/` through `Tonsil4/`. The default is `inputs/tresflow`; you can point it to your existing output folder. Set `reference_dir`, `output_root`, or `threads` in the same file. Relative roots are resolved from this repository.
 
+To start from dataset-level RNA counts and histone fragments, set `dataset_root` in `study.json` to the folder containing those files.
+
 | Input | Path |
 |---|---|
 | RNA | Under `tresflow_root`: `<sample>/rna_align/<library>.Solo.outGeneFull/filtered/` with `matrix.mtx.gz`, `barcodes.tsv.gz`, and `features.tsv.gz` |

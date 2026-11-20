@@ -4,10 +4,10 @@
 
 Use an analysis environment with Scanpy, AnnData, SnapATAC2, Matplotlib, matplotlib-venn, UpSetPlot, samtools, MACS3, BEDTools, deepTools, and GNU Parallel.
 
-Put the downloaded data from GEO GSE324511 in `inputs/` beside `run.sh`. Rename each RNA matrix in its own sample directory as shown below.
+Set `DATA_ROOT` to your input folder. The default is `inputs/` beside `run.sh`.
 
 ```bash
-cd suppl_fig3
+cd Suppl_Fig3
 bash run.sh --check-inputs
 bash run.sh
 ```
@@ -39,25 +39,9 @@ Sc_CMD_WSU_H3K27me3_NoDup.bam
 
 Use the coordinate-sorted, deduplicated BAMs with their original `CB` tags. 
 
-### Filtered STARsolo GeneFull matrices
+### RNA counts
 
-```text
-A20.Solo.outGeneFull/filtered/matrix.mtx.gz
-A20.Solo.outGeneFull/filtered/features.tsv.gz
-A20.Solo.outGeneFull/filtered/barcodes.tsv.gz
-GM12878.Solo.outGeneFull/filtered/matrix.mtx.gz
-GM12878.Solo.outGeneFull/filtered/features.tsv.gz
-GM12878.Solo.outGeneFull/filtered/barcodes.tsv.gz
-JJN3.Solo.outGeneFull/filtered/matrix.mtx.gz
-JJN3.Solo.outGeneFull/filtered/features.tsv.gz
-JJN3.Solo.outGeneFull/filtered/barcodes.tsv.gz
-Karpas422.Solo.outGeneFull/filtered/matrix.mtx.gz
-Karpas422.Solo.outGeneFull/filtered/features.tsv.gz
-Karpas422.Solo.outGeneFull/filtered/barcodes.tsv.gz
-WSU.Solo.outGeneFull/filtered/matrix.mtx.gz
-WSU.Solo.outGeneFull/filtered/features.tsv.gz
-WSU.Solo.outGeneFull/filtered/barcodes.tsv.gz
-```
+Provide `CellLineMix_<line>_RNA_matrix.mtx.gz`, `CellLineMix_<line>_RNA_features.tsv.gz`, and `CellLineMix_<line>_RNA_barcodes.tsv.gz` for each cell line. STARsolo files can also be supplied under `<line>.Solo.outGeneFull/filtered/`.
 
 ### Reference files
 

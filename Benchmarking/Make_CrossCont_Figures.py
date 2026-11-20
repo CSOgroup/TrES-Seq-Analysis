@@ -130,7 +130,7 @@ for _key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUME
     os.environ[_key] = '1'
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from GEO_Preparation.merge_libraries import fragment_path
+from dataset_inputs import fragment_path
 
 MARKS = ('H3K27ac', 'H3K27me3')
 # Aggregate published tracks retain the approved signal-threshold exception.
@@ -150,8 +150,8 @@ GEO_DATASETS = {
 }
 FLANK, BIN_SIZE, QVALUE = 5000, 100, 1e-4
 LABELS = {
-    'MTRseq': 'MTR-seq (1 h)', 'MTR_published': 'scMTR-seq (H9 D0)',
-    'uCoTargetX_overnight': 'uCoTargetX (overnight)', 'uCoTargetX_published': 'uCoTargetX (K562)',
+    'MTRseq': 'scMTR-seq (1 h)', 'MTR_published': 'scMTR-seq (H9 D0)',
+    'uCoTargetX_overnight': 'uCoTargetX (12 h)', 'uCoTargetX_published': 'uCoTargetX (K562)',
     'NanoCNT_inhouse': 'Nano-CUT&Tag (K422)', 'NanoCNT_published': 'Nano-CUT&Tag (mouse)', 'TrES': 'TrES',
 }
 STYLE = '''font.family: DejaVu Sans
@@ -501,7 +501,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--datasets', nargs='+', choices=DATASETS, default=list(DATASETS))
     parser.add_argument('--dataset-root', type=Path,
-                        help='Root of the merged in-house dataset folders')
+                        help='Folder containing the study histone fragment files')
     parser.add_argument('--check-inputs', action='store_true', help='Check required paths and stop')
     parser.add_argument('--threads', type=int, default=8)
     args = parser.parse_args()
@@ -511,7 +511,9 @@ def main():
         root = args.dataset_root.expanduser().resolve()
         for dataset, name in GEO_DATASETS.items():
             for mark, key in DATASETS[dataset][2].items():
-                replacements[key] = fragment_path(root, name, mark)
+                path = fragment_path(root, name, mark, for_input=True)
+                if dataset != 'NanoCNT_inhouse' or path.is_file():
+                    replacements[key] = path
     paths = check_inputs(args.datasets, replacements)
     if args.check_inputs:
         print(f'All {len(paths)} required files exist.'); return

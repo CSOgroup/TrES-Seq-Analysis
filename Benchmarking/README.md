@@ -10,6 +10,8 @@ Set the input paths at the top of each script for your installation. The `SOURCE
 
 Use `--public-only` for the public benchmark.
 
+Use `--dataset-root /path/to/data` for the benchmark and cross-mark workflows, and `--input-dir /path/to/data` for correlation heatmaps.
+
 ## Single-cell tracks
 
 Run step 0 on three coordinate-sorted, indexed hg38 BAMs containing the cells eligible for plotting. It writes the locus BAMs to `inputs/`, where step 1 reads them. Start at step 1 if those locus BAMs are already available.
