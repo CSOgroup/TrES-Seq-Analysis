@@ -24,6 +24,11 @@ for cell in GM12878 JJN3 Karpas422 WSU A20; do
   for mark in H3K27ac H3K27me3; do
     need_file "$BAM_DIR/Sc_CMD_${cell}_${mark}_NoDup.bam"
   done
+  prefix="$RNA_DIR/CellLineMix_${cell}_RNA_"
+  if [[ -f "${prefix}matrix.mtx.gz" && -f "${prefix}features.tsv.gz" && -f "${prefix}barcodes.tsv.gz" ]]; then
+    for file in matrix.mtx.gz features.tsv.gz barcodes.tsv.gz; do need_file "$prefix$file"; done
+    continue
+  fi
   matrix_dir="$RNA_DIR/${cell}.Solo.outGeneFull/filtered"
   if [[ -f "$matrix_dir/genes.tsv" ]]; then
     for file in matrix.mtx genes.tsv barcodes.tsv; do need_file "$matrix_dir/$file"; done

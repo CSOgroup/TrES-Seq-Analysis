@@ -263,7 +263,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from GEO_Preparation.merge_libraries import fragment_path, library_pattern, rna_paths, split_cell_id
+from dataset_inputs import fragment_path, library_pattern, rna_paths, split_cell_id
 
 LOG = logging.getLogger("benchmark_figures")
 MARKS = ("H3K27ac", "H3K27me3")
@@ -303,9 +303,9 @@ K422_K9_DT = {lib: {"dna": {mark: f"K422_K9_DT_{lib}_{mark}" for mark in K422_K9
 EXPERIMENT_INFO = {
     "TrES": ("TrES", "not specified", "TrES"),
     "uCoTargetX": ("uCoTargetX", "1 h", "uCoTargetX (1 h binding)"),
-    "uCoTargetX_OverNight": ("uCoTargetX", "overnight", "uCoTargetX (overnight binding)"),
-    "MTRseq": ("MTRseq", "1 h", "MTRseq (1 h binding)"),
-    "MTRseq_OverNight": ("MTRseq", "overnight", "MTRseq (overnight binding)"),
+    "uCoTargetX_OverNight": ("uCoTargetX", "12 h", "uCoTargetX (12 h binding)"),
+    "MTRseq": ("MTRseq", "1 h", "scMTR-seq (1 h binding)"),
+    "MTRseq_OverNight": ("MTRseq", "12 h", "scMTR-seq (12 h binding)"),
     "InHouse_NanoCNT": ("NanoCNT", "not specified", "In-house NanoCNT")}
 IH_COLORS = {"TrES":"#315A79","uCoTargetX":"#238477","uCoTargetX_OverNight":"#67AD9F",
              "MTRseq":"#B5677A","MTRseq_OverNight":"#D298A7","InHouse_NanoCNT":"#B39051"}
@@ -1144,9 +1144,11 @@ def dataset_inputs(root):
     if root is not None:
         for dataset, source in INHOUSE.items():
             for mark, key in source["dna"].items():
-                replacements[key] = fragment_path(root, dataset, mark)
+                path = fragment_path(root, dataset, mark, for_input=True)
+                if dataset != "InHouse_NanoCNT" or path.is_file():
+                    replacements[key] = path
             if "rna" in source:
-                matrix, features, barcodes = rna_paths(root, dataset)
+                matrix, features, barcodes = rna_paths(root, dataset, for_input=True)
                 replacements.update(zip(source["rna"], (matrix, barcodes, features)))
     return replacements
 
@@ -1469,7 +1471,7 @@ def compute_public(work, memo, out, replacements=None):
 def merged_showcase_inputs(root, work):
     """Recover the original three library groups for QC and pooled peak calling."""
     pattern = library_pattern(K422_K9_LIBRARIES)
-    matrix, features, barcodes = rna_paths(root, K422_K9_DATASET)
+    matrix, features, barcodes = rna_paths(root, K422_K9_DATASET, for_input=True)
     rna = read_mex((matrix, barcodes, features), unique_names=False)
     cells = [split_cell_id(cell, pattern) for cell in rna.obs_names]
     rna_by_library = {}
@@ -1483,7 +1485,7 @@ def merged_showcase_inputs(root, work):
 
     dna = {}
     for mark in K422_K9_DT_MARKS:
-        source = fragment_path(root, K422_K9_DATASET, mark)
+        source = fragment_path(root, K422_K9_DATASET, mark, for_input=True)
         paths = {lib: work / f"k422_k9_dt_{lib}_{mark}.gz" for lib in K422_K9_DT}
         originals = {lib: {} for lib in paths}
         counts = {lib: Counter() for lib in paths}
@@ -1660,8 +1662,8 @@ def check_inputs(required=None, dataset_root=None, replacements=None):
         showcase_keys = {key for key in keys if key.startswith("K422_K9_DT_")}
         if showcase_keys:
             keys -= showcase_keys
-            paths.extend(rna_paths(dataset_root, K422_K9_DATASET))
-            paths.extend(fragment_path(dataset_root, K422_K9_DATASET, mark) for mark in K422_K9_DT_MARKS)
+            paths.extend(rna_paths(dataset_root, K422_K9_DATASET, for_input=True))
+            paths.extend(fragment_path(dataset_root, K422_K9_DATASET, mark, for_input=True) for mark in K422_K9_DT_MARKS)
     for key in INPUTS:
         if key not in keys:
             continue
@@ -1689,7 +1691,7 @@ def main():
     mode.add_argument("--public-only",action="store_true",help="Run the public benchmark panels only")
     mode.add_argument("--mtr-rna-only",action="store_true",help="Build scRNA_D0.h5ad from the GEO RNA triplets only")
     parser.add_argument("--dataset-root", type=Path,
-                        help="Root of the merged in-house RNA and histone dataset folders")
+                        help="Folder containing the study RNA and histone files")
     parser.add_argument("--check-inputs",action="store_true",help="Check required paths and stop")
     args=parser.parse_args()
     logging.basicConfig(level=logging.INFO,format="%(message)s")

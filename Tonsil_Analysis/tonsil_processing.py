@@ -39,8 +39,8 @@ from scipy.stats import gaussian_kde
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
-from GEO_Preparation.merge_libraries import fragment_path as dataset_fragment_path, library_pattern
-from GEO_Preparation.merge_libraries import rna_paths as dataset_rna_paths, split_cell_id
+from dataset_inputs import fragment_path as dataset_fragment_path, library_pattern
+from dataset_inputs import rna_paths as dataset_rna_paths, split_cell_id
 
 STUDY = ROOT / 'study.json'
 CURATION = ROOT / 'cell_curation.tsv.gz'
@@ -344,7 +344,7 @@ def rna_paths(config, sample, library):
 
 def histone_path(config, sample, library, mark):
     if library is None:
-        return dataset_fragment_path(config['datasets'],sample,mark)
+        return dataset_fragment_path(config['datasets'],sample,mark,for_input=True)
     suffix = config['dna_processing'].get('bam_suffix', 'NoDup')
     if suffix not in ('NoDup', 'MarkedDup'):
         raise ValueError("dna_processing.bam_suffix must be 'NoDup' or 'MarkedDup'")
@@ -518,7 +518,7 @@ def read_rna(config, sample, sc, ad):
         rna = read_library_rna(config,sample,sc,ad)
     else:
         name = sample['name']
-        directory = dataset_rna_paths(config['datasets'],name)[0].parent
+        directory = dataset_rna_paths(config['datasets'],name,for_input=True)[0].parent
         log(f'{name}/RNA: {directory}')
         rna = sc.read_10x_mtx(directory,var_names='gene_symbols',make_unique=True,prefix=f'{name}_RNA_')
         rna.obs = merged_cell_metadata(rna.obs_names,sample['libraries'])
@@ -672,7 +672,7 @@ def processing_samples(config, sample=None):
     inputs = [CURATION]
     for donor in chosen:
         if config['datasets'] is not None:
-            inputs.extend(dataset_rna_paths(config['datasets'],donor['name']))
+            inputs.extend(dataset_rna_paths(config['datasets'],donor['name'],for_input=True))
             marks = sorted({m for marks in donor['libraries'].values() for m in marks})
             inputs.extend(histone_path(config,donor['name'],None,m) for m in marks)
             continue

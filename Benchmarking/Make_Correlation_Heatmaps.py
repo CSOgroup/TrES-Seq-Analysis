@@ -11,7 +11,7 @@ BACKUP_ROOT = Path('/mnt/svraw1/Ahrmad/')
 CORR_ROOT = BACKUP_ROOT / 'CORR'
 
 # Reference and output directories
-REFERENCE_DIR = Path(__file__).resolve().parents[1] / 'references'
+REFERENCE_DIR = Path(__file__).resolve().parent / 'references'
 OUTPUT_ROOT = Path(__file__).resolve().parent / 'panel_k_figures'
 SCRATCH_ROOT = Path('/tmp')
 
@@ -39,6 +39,25 @@ INPUTS = {
     'RNA_ENCODE_minus': CORR_ROOT / 'RNA/ENCODE_Bulk_RNAminus.bw',
     'hg38_sizes': REFERENCE_DIR / 'hg38.chrom.sizes',
     'hg38_blacklist': REFERENCE_DIR / 'hg38-blacklist.v2.bed.gz',
+}
+STUDY_BIGWIG_NAMES = {
+    'K9_inhouse_ChIP': 'InHouse_ChIPseq_H3K9me3.bw',
+    'K9_TrES_dual': 'Karpas422_TrES_DualTagmentation_H3K9me3.bw',
+    'K27ac_TrES_rep1': 'Karpas422_TrES_H3K27ac.bw',
+    'K27ac_TrES_rep2': 'Karpas422_rep2_H3K27ac.bw',
+    'K27ac_nanoCT': 'InHouse_nanoCT_H3K27ac.bw',
+    'K27me3_TrES_rep1': 'Karpas422_TrES_H3K27me3.bw',
+    'K27me3_TrES_rep2': 'Karpas422_rep2_H3K27me3.bw',
+    'K27me3_TrES_dual': 'Karpas422_TrES_DualTagmentation_H3K27me3.bw',
+    'K27me3_nanoCT': 'InHouse_nanoCT_H3K27me3.bw',
+    'RNA_TrES_rep1_plus': 'Karpas422_TrES_RNA_plus.bw',
+    'RNA_TrES_rep1_minus': 'Karpas422_TrES_RNA_minus.bw',
+    'RNA_TrES_rep2_plus': 'Karpas422_rep2_RNA_plus.bw',
+    'RNA_TrES_rep2_minus': 'Karpas422_rep2_RNA_minus.bw',
+    'RNA_TrES_dual_plus': 'Karpas422_TrES_DualTagmentation_RNA_plus.bw',
+    'RNA_TrES_dual_minus': 'Karpas422_TrES_DualTagmentation_RNA_minus.bw',
+    'RNA_10x_plus': 'InHouse_10x_RNA_plus.bw',
+    'RNA_10x_minus': 'InHouse_10x_RNA_minus.bw',
 }
 # To replace an input with a verified hg38 BAM, change its INPUTS path, add its
 # explicit index key to INPUTS/SOURCES, and declare (index_key, RNA strand filter).
@@ -179,9 +198,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check-inputs', action='store_true')
     parser.add_argument('--list-inputs', action='store_true')
+    parser.add_argument('--input-dir', type=Path, help='Folder containing the study bigWigs')
     parser.add_argument('--smoke', action='store_true', help='Both heatmaps over chr8:127000000:129000000 in scratch')
     parser.add_argument('--threads', type=int, default=8)
     args = parser.parse_args()
+    if args.input_dir is not None:
+        INPUTS.update({key: args.input_dir.expanduser() / name for key, name in STUDY_BIGWIG_NAMES.items()})
     check_inputs()
     if args.list_inputs:
         writer = csv.writer(sys.stdout, delimiter='\t'); writer.writerow(['key', 'path', 'source', 'generation']); writer.writerows(input_rows()); return

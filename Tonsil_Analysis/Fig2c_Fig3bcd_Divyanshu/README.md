@@ -16,7 +16,7 @@ Figure and table disk writes are commented out; plots and tables stay in the not
 
 ## Inputs
 
-- Preprocessed modality objects (RNA / H3K27ac / H3K27me3 embeddings + counts); paths in `config.py`
+- Preprocessed RNA, H3K27ac and H3K27me3 objects. Set `TRES_TONSIL_MERGED_DIR` to the folder with the `Tonsils1to4_*_merged.h5ad` files before starting the notebook kernel.
 - `processed/four_tonsils_bcellsonly/bcells.h5mu` (B-cell notebooks; see below)
 - `assets/Sungalee_2021_MERs.liftedTo.hg38.bed`
 - Bundled `treseq_paper/paper_assets/promoters_tss_window.bed` (TSS annotation stored as −2 kb / +500 bp; analysis windows rebuilt to −1 kb / +250 bp)
